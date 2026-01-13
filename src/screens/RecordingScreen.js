@@ -14,7 +14,8 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function RecordingScreen({ navigation, route }) {
   const [seconds, setSeconds] = useState(5);
-
+  const [snapshotCount, setSnapshotCount] = useState(0);
+  const [markCount, setMarkCount] = useState(0);
   
   const [emergencyConfirmOpen, setEmergencyConfirmOpen] = useState(false);
 
@@ -49,8 +50,15 @@ export default function RecordingScreen({ navigation, route }) {
     };
   }, [route?.params?.backupData]);
 
-  const handleSnapshot = () => console.log("Snapshot (simulation)");
-  const handleMark = () => console.log("Mark (simulation)");
+  const handleSnapshot = () => {
+    setSnapshotCount((prev) => prev + 1);
+    console.log(`Snapshot taken! Total snapshots: ${snapshotCount + 1}`);
+  };
+  
+  const handleMark = () => {
+    setMarkCount((prev) => prev + 1);
+    console.log(`Mark added! Total marks: ${markCount + 1}`);
+  };
 
  
   const handleEmergency = () => setEmergencyConfirmOpen(true);
@@ -182,6 +190,7 @@ export default function RecordingScreen({ navigation, route }) {
               <Ionicons name="camera" size={18} color="#FFB020" />
             </View>
             <Text style={styles.snapshotText}>Snapshot</Text>
+            <Text style={styles.counterText}>{snapshotCount}</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -201,6 +210,7 @@ export default function RecordingScreen({ navigation, route }) {
             >
               <Ionicons name="flag-outline" size={16} color="white" />
               <Text style={styles.bottomBtnText}>Mark</Text>
+              <Text style={styles.counterText}>{markCount}</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -517,9 +527,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(255,176,32,0.35)",
     paddingVertical: 14,
-    paddingHorizontal: 12,
+    paddingHorizontal: 20,
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "space-between",
     marginBottom: 12,
   },
   snapshotIconBox: {
@@ -535,6 +546,7 @@ const styles = StyleSheet.create({
     color: "rgba(255,255,255,0.85)",
     fontSize: 12,
     fontWeight: "600",
+    flex: 1,
   },
 
   emergencyBtn: {
@@ -562,7 +574,8 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 20,
     marginRight: 10,
   },
   stopBtn: {
@@ -570,6 +583,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.22)",
     borderRadius: 12,
     paddingVertical: 14,
+    paddingHorizontal: 20,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -579,6 +593,13 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "700",
     marginLeft: 8,
+    flex: 1,
+  },
+
+  counterText: {
+    color: "rgba(255,255,255,0.85)",
+    fontSize: 13,
+    fontWeight: "700",
   },
   
   modalBackdrop: {
