@@ -1,38 +1,168 @@
-import React, { useMemo } from "react";
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from "react-native";
+import React, { useMemo, useState } from "react";
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput, Alert } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useAuth } from "../context/AuthContext";
+import supabase from "../lib/supabase";
 
 export default function IncidentDetailsScreen({ navigation, route }) {
   const incident = route?.params?.incident;
+  const { displayName, user } = useAuth();
+
+  const officerName = `Officer ${displayName}`;
+
+  const [driverName, setDriverName] = useState("");
+  const [plateNumber, setPlateNumber] = useState("");
+  const [location, setLocation] = useState("");
+  const [notes, setNotes] = useState("");
+  const [selectedViolations, setSelectedViolations] = useState([]);
+  const [submitting, setSubmitting] = useState(false);
+
+  const commonViolations = useMemo(
+    () => [
+      "Speeding",
+      "No Helmet",
+      "Driving w/o driver's license",
+      "Running Red Light",
+      "Reckless Driving",
+      "DUI Suspicion",
+      "Expired Registration",
+      "No Insurance",
+      "Illegal Parking",
+      "Using Mobile Phone",
+    ],
+    []
+  );
+
+  const [selectedList, setSelectedList] = useState([]);
+  const [customViolation, setCustomViolation] = useState("");
+  const [customList, setCustomList] = useState([]);
+
+  const isSelected = (label) => selectedList.includes(label);
+
+  const addSelected = (label) => {
+    setSelectedList((prev) => {
+      if (prev.includes(label)) return prev;
+      return [...prev, label];
+    });
+  };
+
+  const removeSelected = (label) => {
+    setSelectedList((prev) => prev.filter((x) => x !== label));
+  };
+
+  const toggleViolation = (label) => {
+    if (isSelected(label)) removeSelected(label);
+    else addSelected(label);
+  };
+
+  const addCustomViolation = () => {
+    const v = customViolation.trim();
+    if (!v) return;
+
+    const exists =
+      selectedList.some((x) => x.toLowerCase() === v.toLowerCase()) ||
+      customList.some((x) => x.toLowerCase() === v.toLowerCase()) ||
+      commonViolations.some((x) => x.toLowerCase() === v.toLowerCase());
+
+    if (exists) {
+      setCustomViolation("");
+      return;
+    }
+
+    setCustomList((prev) => [...prev, v]);
+    setSelectedList((prev) => [...prev, v]);
+    setCustomViolation("");
+  };
 
   const data = useMemo(() => {
    
     const fallback = {
       id: "REC-2025-001",
+      incident_id: "INCIDENT20250001",
       status: "COMPLETED",
       dateTime: "Dec 15, 2025, 6:40 PM",
       duration: "1m 25s",
       location: "Camarin Rd., Caloocan",
       transcript:
         "Suspect vehicle license plate is Delta X-Ray Charlie 492. Proceeding with caution...",
-      markers: [
-        { text: "Subject became aggressive", t: "0:30", type: "normal" },
-        { text: "EMERGENCY BACKUP REQUESTED", t: "0:45", type: "alert" },
-      ],
+      violations: ["Speeding", "No Helmet"],
       tags: ["assault", "traffic-stop", "aggressive-subject", "backup-requested"],
     };
 
     const merged = { ...fallback, ...(incident || {}) };
 
-   
-    merged.markers = Array.isArray(merged.markers) ? merged.markers : [];
+    // Set dateTime from date_time if available
+    if (incident?.date_time) {
+      merged.dateTime = new Date(incident.date_time).toLocaleString();
+    }
+
+    merged.violations = Array.isArray(merged.violations) ? merged.violations : [];
     merged.tags = Array.isArray(merged.tags) ? merged.tags : [];
 
-   
+    // Pre-fill state if pending
+    if (merged.status === 'PENDING' && incident) {
+      setDriverName(incident.driver_name || "");
+      setPlateNumber(incident.plate_number || "");
+      setLocation(incident.location || "");
+      setNotes(incident.notes || "");
+      setSelectedViolations(merged.violations);
+      setSelectedList(merged.violations);
+    }
+
     return merged;
   }, [incident]);
+
+  const handleSubmit = async () => {
+    if (!driverName.trim() || !plateNumber.trim()) {
+      Alert.alert("Error", "Driver name and plate number are required.");
+      return;
+    }
+
+    setSubmitting(true);
+
+    const incidentData = {
+      incident_id: data.incident_id,
+      status: "COMPLETED",
+      location,
+      driver_name: driverName,
+      plate_number: plateNumber,
+      violations: selectedList,
+      notes,
+      transcript: data.transcript,
+      duration: data.duration,
+      date_time: incident?.date_time || new Date().toISOString(),
+      officer_id: user.id,
+      display_name: officerName,
+      tags: data.tags,
+    };
+
+    try {
+      await supabase.auth.refreshSession();
+
+      const { data: result, error } = await supabase.functions.invoke('insert-incident', {
+        body: incidentData,
+      });
+
+      if (error) {
+        console.error("Error updating incident:", error);
+        Alert.alert("Error", "Failed to update incident. Please try again.");
+      } else if (result?.success) {
+        Alert.alert("Success", "Incident updated successfully.");
+        navigation.goBack(); // Or refresh
+      } else {
+        Alert.alert("Error", "Failed to update incident. Please try again.");
+      }
+    } catch (err) {
+      console.error("Unexpected error:", err);
+      Alert.alert("Error", "Failed to update incident. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const isPending = data.status === 'PENDING';
 
   return (
     <LinearGradient
@@ -55,7 +185,7 @@ export default function IncidentDetailsScreen({ navigation, route }) {
 
             <View style={{ flex: 1 }}>
               <Text style={styles.headerTitle}>Incident Details</Text>
-              <Text style={styles.headerSub}>{data.id}</Text>
+              <Text style={styles.headerSub}>{data.incident_id || data.id}</Text>
             </View>
           </View>
 
@@ -64,8 +194,8 @@ export default function IncidentDetailsScreen({ navigation, route }) {
           <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
            
             <View style={[styles.card, styles.greenBorder]}>
-              <View style={styles.statusPill}>
-                <Text style={styles.statusText}>{data.status}</Text>
+              <View style={[styles.statusPill, data.status === 'PENDING' ? styles.pendingPill : styles.completedPill]}>
+                <Text style={[styles.statusText, data.status === 'PENDING' ? styles.pendingText : styles.completedText]}>{data.status}</Text>
               </View>
 
               <View style={{ marginTop: 10 }}>
@@ -127,37 +257,172 @@ export default function IncidentDetailsScreen({ navigation, route }) {
               </View>
             </View>
 
-          
+            <View style={[styles.card, styles.orangeBorder]}>
+              <View style={styles.sectionHeader}>
+                <View style={[styles.sectionIconBox, { backgroundColor: "rgba(255,176,32,0.14)" }]}>
+                  <Ionicons name="person-outline" size={16} color="#FFB020" />
+                </View>
+                <Text style={styles.sectionTitle}>Driver Details</Text>
+              </View>
+
+              <View style={styles.innerBox}>
+                {isPending ? (
+                  <>
+                    <Text style={styles.innerLabel}>Driver Name:</Text>
+                    <TextInput
+                      value={driverName}
+                      onChangeText={setDriverName}
+                      placeholder="Enter driver name"
+                      placeholderTextColor="rgba(255,255,255,0.5)"
+                      style={styles.input}
+                    />
+                    <Text style={styles.innerLabel}>Plate Number:</Text>
+                    <TextInput
+                      value={plateNumber}
+                      onChangeText={setPlateNumber}
+                      placeholder="Enter plate number"
+                      placeholderTextColor="rgba(255,255,255,0.5)"
+                      style={styles.input}
+                    />
+                    <Text style={styles.innerLabel}>Location:</Text>
+                    <TextInput
+                      value={location}
+                      onChangeText={setLocation}
+                      placeholder="Enter location"
+                      placeholderTextColor="rgba(255,255,255,0.5)"
+                      style={styles.input}
+                    />
+                    <Text style={styles.innerLabel}>Notes:</Text>
+                    <TextInput
+                      value={notes}
+                      onChangeText={setNotes}
+                      placeholder="Enter notes"
+                      placeholderTextColor="rgba(255,255,255,0.5)"
+                      style={[styles.input, styles.notesInput]}
+                      multiline
+                    />
+                  </>
+                ) : (
+                  <>
+                    <Text style={styles.innerLabel}>Driver Name: {data.driver_name || "N/A"}</Text>
+                    <Text style={styles.innerLabel}>Plate Number: {data.plate_number || "N/A"}</Text>
+                    <Text style={styles.innerLabel}>Notes: {data.notes || "N/A"}</Text>
+                  </>
+                )}
+              </View>
+            </View>
+
             <View style={[styles.card, styles.orangeBorder]}>
               <View style={styles.sectionHeader}>
                 <View style={[styles.sectionIconBox, { backgroundColor: "rgba(255,176,32,0.14)" }]}>
                   <Ionicons name="flag-outline" size={16} color="#FFB020" />
                 </View>
-                <Text style={styles.sectionTitle}>Incident Markers</Text>
+                <Text style={styles.sectionTitle}>Violations</Text>
               </View>
 
-              <View style={styles.markerList}>
-                {data.markers.length === 0 ? (
-                  <View style={styles.markerRow}>
-                    <Text style={styles.markerEmpty}>No markers recorded</Text>
-                  </View>
-                ) : (
-                  data.markers.map((m, idx) => (
-                    <View key={`${m.text}-${idx}`}>
-                      <View style={styles.markerRow}>
-                        <Text
-                          style={[styles.markerText, m.type === "alert" ? styles.markerAlert : null]}
-                          numberOfLines={1}
-                        >
-                          {m.text}
-                        </Text>
-                        <Text style={styles.markerTime}>{m.t}</Text>
-                      </View>
-                      {idx !== data.markers.length - 1 && <View style={styles.softDivider} />}
+              {isPending ? (
+                <>
+                  {selectedList.length === 0 ? (
+                    <View style={styles.ghostInput}>
+                      <Text style={styles.ghostText}>No violations added yet</Text>
                     </View>
-                  ))
-                )}
-              </View>
+                  ) : (
+                    <View style={styles.selectedListWrap}>
+                      {selectedList.map((v, idx) => (
+                        <View key={`${v}-${idx}`} style={styles.selectedRow}>
+                          <Text style={styles.selectedRowText}>
+                            {idx + 1}. {v}
+                          </Text>
+
+                          <TouchableOpacity
+                            onPress={() => removeSelected(v)}
+                            activeOpacity={0.8}
+                            style={styles.removeBtn}
+                          >
+                            <Ionicons
+                              name="close"
+                              size={14}
+                              color="rgba(255,255,255,0.70)"
+                            />
+                          </TouchableOpacity>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+
+                  <Text style={[styles.label, { marginTop: 12 }]}>
+                    Common Violations:
+                  </Text>
+
+                  <View style={styles.commonGrid}>
+                    {commonViolations.map((v) => {
+                      const on = isSelected(v);
+                      return (
+                        <TouchableOpacity
+                          key={v}
+                          activeOpacity={0.85}
+                          onPress={() => toggleViolation(v)}
+                          style={[styles.commonBtn, on ? styles.commonBtnOn : null]}
+                        >
+                          <Text
+                            style={[
+                              styles.commonBtnText,
+                              on ? styles.commonBtnTextOn : null,
+                            ]}
+                          >
+                            {v}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+
+                  <Text style={[styles.label, { marginTop: 12 }]}>
+                    Add Custom Violation
+                  </Text>
+
+                  <View style={styles.customRow}>
+                    <View style={[styles.inputWrap, { flex: 1, height: 42 }]}>
+                      <TextInput
+                        value={customViolation}
+                        onChangeText={setCustomViolation}
+                        placeholder="Enter other violation"
+                        placeholderTextColor="rgba(255,255,255,0.35)"
+                        style={[styles.input, { height: 42 }]}
+                        returnKeyType="done"
+                        onSubmitEditing={addCustomViolation}
+                      />
+                    </View>
+
+                    <TouchableOpacity
+                      style={styles.addBtn}
+                      activeOpacity={0.9}
+                      onPress={addCustomViolation}
+                    >
+                      <Text style={styles.addBtnText}>Add</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              ) : (
+                <View style={styles.markerList}>
+                  {data.violations.length === 0 ? (
+                    <View style={styles.markerRow}>
+                      <Text style={styles.markerEmpty}>No violations recorded</Text>
+                    </View>
+                  ) : (
+                    data.violations.map((v, idx) => (
+                      <View key={`${v}-${idx}`}>
+                        <View style={styles.markerRow}>
+                          <Text style={styles.markerText} numberOfLines={1}>
+                            {v}
+                          </Text>
+                        </View>
+                        {idx !== data.violations.length - 1 && <View style={styles.softDivider} />}
+                      </View>
+                    ))
+                  )}
+                </View>
+              )}
             </View>
 
             {/* Tags */}
@@ -184,6 +449,20 @@ export default function IncidentDetailsScreen({ navigation, route }) {
 
             <View style={{ height: 24 }} />
           </ScrollView>
+
+          {isPending && (
+            <View style={styles.bottomBar}>
+              <TouchableOpacity
+                onPress={handleSubmit}
+                disabled={submitting}
+                style={[styles.finalizeBtn, submitting && styles.finalizeBtnDisabled]}
+              >
+                <Text style={styles.finalizeText}>
+                  {submitting ? "Updating..." : "Complete Incident"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
       </SafeAreaView>
     </LinearGradient>
@@ -242,11 +521,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 8,
-    backgroundColor: "rgba(46,204,113,0.18)",
     borderWidth: 1,
+  },
+  completedPill: {
+    backgroundColor: "rgba(46,204,113,0.18)",
     borderColor: "rgba(46,204,113,0.35)",
   },
-  statusText: { color: "#2ECC71", fontSize: 10, fontWeight: "900" },
+  pendingPill: {
+    backgroundColor: "rgba(255,176,32,0.18)",
+    borderColor: "rgba(255,176,32,0.35)",
+  },
+  statusText: { fontSize: 10, fontWeight: "900" },
+  completedText: { color: "#2ECC71" },
+  pendingText: { color: "#FFB020" },
 
   row: { flexDirection: "row", alignItems: "center", marginTop: 8 },
   rowText: { marginLeft: 8, color: "rgba(255,255,255,0.70)", fontSize: 11 },
@@ -354,12 +641,117 @@ const styles = StyleSheet.create({
   tagsRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   tagsEmpty: { color: "rgba(255,255,255,0.45)", fontSize: 11 },
   tagChip: {
-    backgroundColor: "rgba(255,122,26,0.20)",
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    backgroundColor: "rgba(255,176,32,0.14)",
     borderWidth: 1,
-    borderColor: "rgba(255,122,26,0.35)",
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
+    borderColor: "rgba(255,176,32,0.30)",
   },
-  tagText: { color: "rgba(255,255,255,0.85)", fontSize: 10, fontWeight: "800" },
+  tagText: { color: "#FFB020", fontSize: 10, fontWeight: "700" },
+  input: { color: "rgba(255,255,255,0.90)", fontSize: 12, borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,0.3)", paddingVertical: 4 },
+  notesInput: { minHeight: 60, textAlignVertical: "top" },
+
+  label: { color: "rgba(255,255,255,0.55)", fontSize: 11 },
+
+  inputWrap: {
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
+    paddingHorizontal: 12,
+    height: 44,
+    justifyContent: "center",
+  },
+
+  ghostInput: {
+    height: 40,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
+    backgroundColor: "rgba(255,255,255,0.05)",
+    justifyContent: "center",
+    paddingHorizontal: 12,
+  },
+  ghostText: { color: "rgba(255,255,255,0.40)", fontSize: 11 },
+
+  selectedListWrap: { gap: 10 },
+  selectedRow: {
+    height: 40,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255,80,80,0.35)",
+    backgroundColor: "rgba(255,255,255,0.04)",
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  selectedRowText: { color: "rgba(255,255,255,0.80)", fontSize: 11 },
+  removeBtn: {
+    width: 26,
+    height: 26,
+    borderRadius: 8,
+    backgroundColor: "rgba(255,255,255,0.10)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  commonGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+    marginTop: 10,
+    rowGap: 10,
+  },
+  commonBtn: {
+    width: "48%",
+    height: 36,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
+    backgroundColor: "rgba(255,255,255,0.04)",
+    paddingHorizontal: 10,
+    justifyContent: "center",
+  },
+  commonBtnOn: {
+    borderColor: "rgba(255,80,80,0.45)",
+    backgroundColor: "rgba(255,80,80,0.16)",
+  },
+  commonBtnText: { color: "rgba(255,255,255,0.70)", fontSize: 11 },
+  commonBtnTextOn: { color: "rgba(255,255,255,0.92)", fontWeight: "700" },
+
+  customRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 10,
+    gap: 10,
+  },
+  addBtn: {
+    height: 42,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    backgroundColor: "#FF7A1A",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  addBtnText: { color: "white", fontSize: 12, fontWeight: "700" },
+
+  bottomBar: {
+    paddingHorizontal: 16,
+    paddingBottom: 14,
+    paddingTop: 8,
+    backgroundColor: "rgba(0,0,0,0.18)",
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255,255,255,0.08)",
+  },
+  finalizeBtn: {
+    backgroundColor: "#1E9E5A",
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  finalizeText: { color: "white", fontSize: 15, fontWeight: "700" },
+  finalizeBtnDisabled: { backgroundColor: "rgba(30,158,90,0.5)" },
 });

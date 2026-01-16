@@ -10,18 +10,26 @@ import {
   Platform,
   Modal,
   Pressable,
+  Alert,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../context/AuthContext";
+import supabase from "../lib/supabase";
 
-export default function IncidentSummaryScreen({ navigation }) {
-  const { displayName, badge } = useAuth();
+export default function IncidentSummaryScreen({ navigation, route }) {
+  const { displayName, badge, user } = useAuth();
+  
+  const formatDuration = (secs) => {
+    const mm = Math.floor(secs / 60);
+    const ss = String(secs % 60).padStart(2, '0');
+    return `${mm}m ${ss}s`;
+  };
   
   const officerName = `Officer ${displayName}`;
   const badgeText = badge ? `#${badge}` : '';
-  const duration = "3m 42s";
+  const duration = route?.params?.duration ? formatDuration(route.params.duration) : "3m 42s";
   const dateTime = new Date().toLocaleString();
 
   const [driverName, setDriverName] = useState("");
@@ -29,6 +37,7 @@ export default function IncidentSummaryScreen({ navigation }) {
   const [location, setLocation] = useState("Camarin rd. Caloocan City");
 
   const [closeOpen, setCloseOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   const commonViolations = useMemo(
     () => [
@@ -91,23 +100,123 @@ export default function IncidentSummaryScreen({ navigation }) {
     setCustomViolation("");
   };
 
-  const handleFinalize = () => {
-    console.log("Finalize submission (simulation)", {
-      driverName,
-      plateNumber,
+  const handleFinalize = async () => {
+    if (!driverName.trim() || !plateNumber.trim()) {
+      Alert.alert("Error", "Driver name and plate number are required.");
+      return;
+    }
+
+    if (!user?.id) {
+      Alert.alert("Error", "User not logged in.");
+      return;
+    }
+
+    setSubmitting(true);
+
+    const incidentData = {
+      officer_id: user.id,
+      status: "COMPLETED",
       location,
+      duration,
+      transcript,
+      tags: [], // Add logic if needed
+      alert: false, // Add logic if needed
+      driver_name: driverName,
+      plate_number: plateNumber,
       violations: selectedList,
       notes,
-    });
+      display_name: displayName,
+      date_time: new Date().toISOString(),
+    };
 
-    navigation.popToTop();
+    try {
+      // Refresh the session to ensure valid JWT
+      await supabase.auth.refreshSession();
+
+      const { data, error } = await supabase.functions.invoke('insert-incident', {
+        body: incidentData,
+      });
+
+      if (error) {
+        console.error("Error saving incident:", error);
+        console.log("Full error details:", JSON.stringify(error, null, 2));
+        // Get the response body
+        try {
+          const responseBody = await error.context.text();
+          console.log("Response body:", responseBody);
+        } catch (e) {
+          console.log("Could not read response body:", e);
+        }
+        Alert.alert("Error", "Failed to submit report. Please try again.");
+      } else if (data?.success) {
+        navigation.popToTop();
+      } else {
+        Alert.alert("Error", "Failed to submit report. Please try again.");
+      }
+    } catch (err) {
+      console.error("Unexpected error:", err);
+      console.log("Caught error details:", JSON.stringify(err, null, 2));
+      Alert.alert("Error", "Failed to submit report. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const handleClose = () => setCloseOpen(true);
 
-  const confirmClose = () => {
+  const confirmClose = async () => {
     setCloseOpen(false);
-    navigation.navigate("Home");
+    setSubmitting(true);
+
+    const incidentData = {
+      officer_id: user.id,
+      status: "PENDING",
+      location,
+      duration,
+      transcript,
+      tags: [], // Add logic if needed
+      alert: false, // Add logic if needed
+      driver_name: driverName || "Unknown",
+      plate_number: plateNumber || "Unknown",
+      violations: selectedList,
+      notes,
+      display_name: displayName,
+      date_time: new Date().toISOString(),
+    };
+
+    try {
+      // Refresh the session to ensure valid JWT
+      await supabase.auth.refreshSession();
+
+      const { data, error } = await supabase.functions.invoke('insert-incident', {
+        body: incidentData,
+      });
+
+      if (error) {
+        console.error("Error saving incident:", error);
+        console.log("Full error details:", JSON.stringify(error, null, 2));
+        // Get the response body
+        try {
+          const responseBody = await error.context.text();
+          console.log("Response body:", responseBody);
+        } catch (e) {
+          console.log("Could not read response body:", e);
+        }
+        Alert.alert("Error", "Failed to save draft. Please try again.");
+        setSubmitting(false);
+        return;
+      } else if (data?.success) {
+        navigation.navigate("Home");
+      } else {
+        Alert.alert("Error", "Failed to save draft. Please try again.");
+        setSubmitting(false);
+      }
+    } catch (err) {
+      console.error("Unexpected error:", err);
+      console.log("Caught error details:", JSON.stringify(err, null, 2));
+      Alert.alert("Error", "Failed to save draft. Please try again.");
+      setSubmitting(false);
+    }
   };
 
   const noViolations = selectedList.length === 0;
@@ -355,11 +464,14 @@ export default function IncidentSummaryScreen({ navigation }) {
             
             <View style={styles.bottomBar}>
               <TouchableOpacity
-                style={styles.finalizeBtn}
+                style={[styles.finalizeBtn, submitting && styles.finalizeBtnDisabled]}
                 activeOpacity={0.9}
                 onPress={handleFinalize}
+                disabled={submitting}
               >
-                <Text style={styles.finalizeText}>Submit Report</Text>
+                <Text style={styles.finalizeText}>
+                  {submitting ? "Submitting..." : "Submit Report"}
+                </Text>
               </TouchableOpacity>
             </View>
 
@@ -657,6 +769,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   finalizeText: { color: "white", fontSize: 15, fontWeight: "700" },
+  finalizeBtnDisabled: { backgroundColor: "rgba(30,158,90,0.5)" },
 
   
   modalBackdrop: {

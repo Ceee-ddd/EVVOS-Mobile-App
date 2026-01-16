@@ -13,7 +13,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function RecordingScreen({ navigation, route }) {
-  const [seconds, setSeconds] = useState(5);
+  const [seconds, setSeconds] = useState(0);
   const [snapshotCount, setSnapshotCount] = useState(0);
   const [markCount, setMarkCount] = useState(0);
   
@@ -87,7 +87,7 @@ export default function RecordingScreen({ navigation, route }) {
   const confirmStop = () => {
     console.log("Stop Recording CONFIRMED (simulation)");
     setStopOpen(false);
-    navigation.navigate("IncidentSummary");
+    navigation.navigate("IncidentSummary", { duration: seconds });
   };
 
   const bars = useMemo(

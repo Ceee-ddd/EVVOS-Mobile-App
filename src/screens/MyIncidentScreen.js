@@ -10,69 +10,59 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { useAuth } from "../context/AuthContext";
+import supabase from "../lib/supabase";
+import { useFocusEffect } from '@react-navigation/native';
 
 export default function MyIncidentScreen({ navigation }) {
+  const { user } = useAuth(); // Assuming user.id is the officer_id
   const [tab, setTab] = useState("All"); 
   const [q, setQ] = useState("");
+  const [incidents, setIncidents] = useState([]);
+  const [loading, setLoading] = useState(true);
 
-  const incidents = useMemo(
-    () => [
-      {
-        id: "REC-2025-001",
-        status: "COMPLETED",
-        age: "30m ago",
-        location: "Camarin Rd., Caloocan City",
-        duration: "1:25",
-        transcript:
-          "Suspect vehicle license plate is Delta X-Ray Charlie 492. Proceeding with caution...",
-        tags: ["assault", "traffic-stop", "aggressive-subject", "+1 more"],
-        alert: true,
-      },
-      {
-        id: "REC-2025-002",
-        status: "COMPLETED",
-        age: "2h ago",
-        location: "Mayville Subdivision Liano Rd., Caloocan City",
-        duration: "2:03",
-        transcript:
-          "Suspect vehicle license plate is Delta X-Ray Charlie 492. Proceeding with caution...",
-        tags: ["speeding", "traffic-violation"],
-        alert: false,
-      },
-      {
-        id: "REC-2025-003",
-        status: "COMPLETED",
-        age: "5h ago",
-        location: "Bagong Silang, Caloocan City",
-        duration: "1:47",
-        transcript:
-          "Suspect vehicle license plate is Delta X-Ray Charlie 492. Proceeding with caution...",
-        tags: ["pedestrian-safety", "warning-issued"],
-        alert: false,
-      },
-    ],
-    []
+  useFocusEffect(
+    React.useCallback(() => {
+      const fetchIncidents = async () => {
+        if (!user?.id) return;
+        setLoading(true);
+        const { data, error } = await supabase
+          .from("incidents")
+          .select("*")
+          .eq("officer_id", user.id)
+          .order("created_at", { ascending: false });
+        if (error) {
+          console.error("Error fetching incidents:", error);
+        } else {
+          setIncidents(data || []);
+        }
+        setLoading(false);
+      };
+      fetchIncidents();
+    }, [user])
   );
 
   const filtered = useMemo(() => {
     const query = q.trim().toLowerCase();
-
     let base =
       tab === "All"
         ? incidents
         : tab === "Completed"
         ? incidents.filter((x) => x.status === "COMPLETED")
-        : []; 
+        : tab === "Pending"
+        ? incidents.filter((x) => x.status === "PENDING")
+        : [];
 
     if (!query) return base;
 
     return base.filter((x) => {
       const hay = [
         x.id,
-        x.location,
-        x.duration,
-        x.transcript,
+        x.location || "",
+        x.duration || "",
+        x.transcript || "",
         ...(x.tags || []),
+        ...(x.violations || []),
       ]
         .join(" ")
         .toLowerCase();
@@ -80,7 +70,7 @@ export default function MyIncidentScreen({ navigation }) {
     });
   }, [tab, q, incidents]);
 
-  const showEmpty = tab === "Pending" || filtered.length === 0;
+  const showEmpty = loading || (tab === "Pending" && filtered.length === 0) || (!loading && filtered.length === 0);
 
   return (
     <LinearGradient
@@ -107,7 +97,7 @@ export default function MyIncidentScreen({ navigation }) {
 
             <View style={styles.headerText}>
               <Text style={styles.headerTitle}>My Incident</Text>
-              <Text style={styles.headerSub}>10 recordings</Text>
+              <Text style={styles.headerSub}>{incidents.length} recordings</Text>
             </View>
           </View>
 
@@ -160,91 +150,94 @@ export default function MyIncidentScreen({ navigation }) {
               <View style={styles.emptyWrap}>
                 <View style={styles.emptyIcon}>
                   <Ionicons
-                    name="videocam-outline"
+                    name={loading ? "refresh" : "videocam-outline"}
                     size={26}
                     color="rgba(255,255,255,0.35)"
                   />
                 </View>
-                <Text style={styles.emptyText}>No incident found</Text>
+                <Text style={styles.emptyText}>
+                  {loading ? "Loading incidents..." : "No incident found"}
+                </Text>
               </View>
             ) : (
-              filtered.map((item) => (
-                <TouchableOpacity
-                  key={item.id}
-                  activeOpacity={0.9}
-                  style={styles.card}
-                  onPress={() => navigation.navigate("IncidentDetails", { incident: item })}
-                >
-                 
-                  <View style={styles.cardTop}>
-                    <View style={styles.statusPill}>
-                      <Text style={styles.statusText}>{item.status}</Text>
-                    </View>
+              filtered.map((item) => {
+                const age = getAge(item.created_at);
+                return (
+                  <TouchableOpacity
+                    key={item.id}
+                    activeOpacity={0.9}
+                    style={styles.card}
+                    onPress={() => navigation.navigate("IncidentDetails", { incident: item })}
+                  >
+                   
+                    <View style={styles.cardTop}>
+                      <View style={[styles.statusPill, item.status === 'PENDING' ? styles.pendingPill : styles.completedPill]}>
+                        <Text style={[styles.statusText, item.status === 'PENDING' ? styles.pendingText : styles.completedText]}>{item.status}</Text>
+                      </View>
 
-                    <View style={styles.rightTop}>
-                      {item.alert ? (
+                      <View style={styles.rightTop}>
+                        {item.alert ? (
+                          <Ionicons
+                            name="warning-outline"
+                            size={16}
+                            color="rgba(255,176,32,0.9)"
+                            style={{ marginRight: 6 }}
+                          />
+                        ) : null}
                         <Ionicons
-                          name="warning-outline"
+                          name="chevron-forward"
                           size={16}
-                          color="rgba(255,176,32,0.9)"
-                          style={{ marginRight: 6 }}
+                          color="rgba(255,255,255,0.35)"
                         />
-                      ) : null}
-                      <Ionicons
-                        name="chevron-forward"
-                        size={16}
-                        color="rgba(255,255,255,0.35)"
-                      />
+                      </View>
                     </View>
-                  </View>
 
-                  <Text style={styles.incidentTitle}>
-                    Incident {item.id}
-                  </Text>
-                  <Text style={styles.ageText}>{item.age}</Text>
+                    <Text style={styles.incidentTitle}>{item.incident_id || item.id.slice(0, 8)}</Text>
+                    <Text style={styles.ageText}>{age}</Text>
 
-                  
-                  <View style={styles.metaRow}>
-                    <View style={styles.metaItem}>
-                      <Ionicons
-                        name="location-outline"
-                        size={14}
-                        color="rgba(255,255,255,0.45)"
-                      />
-                      <Text style={styles.metaText}>{item.location}</Text>
+                   
+                    <View style={styles.metaRow}>
+                      <View style={styles.metaItem}>
+                        <Ionicons
+                          name="location-outline"
+                          size={14}
+                          color="rgba(255,255,255,0.45)"
+                        />
+                        <Text style={styles.metaText}>{item.location}</Text>
+                      </View>
                     </View>
-                  </View>
 
-                  <View style={styles.metaRow}>
-                    <View style={styles.metaItem}>
-                      <Ionicons
-                        name="time-outline"
-                        size={14}
-                        color="rgba(255,255,255,0.45)"
-                      />
-                      <Text style={styles.metaText}>
-                        Duration : {item.duration}
+                    <View style={styles.metaRow}>
+                      <View style={styles.metaItem}>
+                        <Ionicons
+                          name="time-outline"
+                          size={14}
+                          color="rgba(255,255,255,0.45)"
+                        />
+                        <Text style={styles.metaText}>
+                          Duration : {item.duration}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.transBox}>
+                      <Text style={styles.transLabel}>Transcript:</Text>
+                      <Text style={styles.transText} numberOfLines={2}>
+                        {item.transcript}
                       </Text>
                     </View>
-                  </View>
 
-                  <View style={styles.transBox}>
-                    <Text style={styles.transLabel}>Transcript:</Text>
-                    <Text style={styles.transText} numberOfLines={2}>
-                      {item.transcript}
-                    </Text>
-                  </View>
-
-                  {/* tags */}
-                  <View style={styles.tagsRow}>
-                    {item.tags.slice(0, 4).map((t) => (
-                      <View key={t} style={styles.tag}>
-                        <Text style={styles.tagText}>{t}</Text>
-                      </View>
-                    ))}
-                  </View>
-                </TouchableOpacity>
-              ))
+                    {/* tags */}
+                    <View style={styles.tagsRow}>
+                      {(item.tags || []).slice(0, 4).map((t) => (
+                        <View key={t} style={styles.tag}>
+                          <Text style={styles.tagText}>{t}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  </TouchableOpacity>
+                );
+              })
             )}
 
             <View style={{ height: 24 }} />
@@ -253,6 +246,19 @@ export default function MyIncidentScreen({ navigation }) {
       </SafeAreaView>
     </LinearGradient>
   );
+}
+
+function getAge(createdAt) {
+  const now = new Date();
+  const created = new Date(createdAt);
+  const diffMs = now - created;
+  const diffMins = Math.floor(diffMs / (1000 * 60));
+  const diffHours = Math.floor(diffMins / 60);
+  const diffDays = Math.floor(diffHours / 24);
+
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  return `${diffDays}d ago`;
 }
 
 function Pill({ label, active, activeColor, onPress }) {
@@ -364,11 +370,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 8,
-    backgroundColor: "rgba(46,204,113,0.18)",
     borderWidth: 1,
+  },
+  completedPill: {
+    backgroundColor: "rgba(46,204,113,0.18)",
     borderColor: "rgba(46,204,113,0.35)",
   },
-  statusText: { color: "#2ECC71", fontSize: 10, fontWeight: "800" },
+  pendingPill: {
+    backgroundColor: "rgba(255,176,32,0.18)",
+    borderColor: "rgba(255,176,32,0.35)",
+  },
+  statusText: { fontSize: 10, fontWeight: "800" },
+  completedText: { color: "#2ECC71" },
+  pendingText: { color: "#FFB020" },
   rightTop: { flexDirection: "row", alignItems: "center" },
 
   incidentTitle: {
