@@ -14,11 +14,9 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import supabase from "../lib/supabase";
-import { useAuth } from "../context/AuthContext";
 
 export default function ForgotPasswordScreen({ navigation }) {
   const [email, setEmail] = useState("");
-  const { resetPasswordForEmail } = useAuth();
 
   const handleSendLink = async () => {
     const trimmed = email.trim();
@@ -43,17 +41,20 @@ export default function ForgotPasswordScreen({ navigation }) {
         return;
       }
 
-      // Send reset email
-      const result = await resetPasswordForEmail(trimmed);
-      if (!result.success) {
-        Alert.alert("Error", result.error);
+      // Send OTP for password reset
+      const { error: otpError } = await supabase.auth.signInWithOtp({
+        email: trimmed,
+      });
+
+      if (otpError) {
+        Alert.alert("Error", otpError.message);
         return;
       }
 
-      Alert.alert("Link Sent", "A reset link has been sent to your email.", [
+      Alert.alert("OTP Sent", "An 8-digit OTP has been sent to your email.", [
         {
           text: "OK",
-          onPress: () => navigation.goBack(),
+          onPress: () => navigation.navigate("CreateNewPassword", { email: trimmed }),
         },
       ]);
     } catch (err) {
@@ -119,11 +120,11 @@ export default function ForgotPasswordScreen({ navigation }) {
               </View>
 
               <Text style={styles.helper}>
-                Please enter your email to receive a link to set a new password.
+                Please enter your email to receive an 8-digit OTP.
               </Text>
 
               <TouchableOpacity onPress={handleSendLink} style={styles.primaryBtn} activeOpacity={0.85}>
-                <Text style={styles.primaryText}>Send link</Text>
+                <Text style={styles.primaryText}>Send Token</Text>
               </TouchableOpacity>
             </View>
           </View>

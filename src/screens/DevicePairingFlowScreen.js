@@ -7,6 +7,7 @@ import {
   TextInput,
   ActivityIndicator,
   ScrollView,
+  Alert,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
@@ -69,6 +70,24 @@ export default function DevicePairingFlowScreen({ navigation }) {
       index: 0,
       routes: [{ name: "Home" }],
     });
+  };
+
+  const handleGoBack = () => {
+    Alert.alert(
+      "Go Back",
+      "Are you sure you want to go back? This will exit the pairing flow.",
+      [
+        {
+          text: "Cancel",
+          style: "cancel",
+        },
+        {
+          text: "Go Back",
+          style: "destructive",
+          onPress: () => navigation.goBack(),
+        },
+      ]
+    );
   };
 
   const renderContent = () => {
@@ -205,9 +224,8 @@ export default function DevicePairingFlowScreen({ navigation }) {
             </View>
           </View>
 
-          <TouchableOpacity activeOpacity={0.9} onPress={() => navigation.goBack()}>
-            
-            <Ionicons name="arrow-back" size={18} color="rgba(255,255,255,0.😎" />
+          <TouchableOpacity activeOpacity={0.9} onPress={handleGoBack}>
+            <Ionicons name="arrow-back" size={18} color="rgba(255,255,255,0.75)" />
           </TouchableOpacity>
         </View>
 

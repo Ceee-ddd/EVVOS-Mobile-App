@@ -25,8 +25,14 @@ export default function LoginScreen({ navigation }) {
 
   const [badgeError, setBadgeError] = useState("");
   const [passError, setPassError] = useState("");
+  
+  const [attemptCount, setAttemptCount] = useState(0);
+  const [cooldownRemaining, setCooldownRemaining] = useState(0);
+  const [isOnCooldown, setIsOnCooldown] = useState(false);
 
   const handleSignIn = async () => {
+    if (isOnCooldown) return;
+
     const badgeTrimmed = badgeNumber.trim();
     const passTrimmed = password.trim();
 
@@ -51,11 +57,21 @@ export default function LoginScreen({ navigation }) {
     try {
       const result = await loginByBadge(badgeTrimmed, passTrimmed);
       if (!result.success) {
+        const newAttemptCount = attemptCount + 1;
+        setAttemptCount(newAttemptCount);
+        const cooldownDuration = calculateCooldown(newAttemptCount);
         setPassError(result.error);
+
+        if (cooldownDuration > 0) {
+          startCooldown(cooldownDuration);
+        }
         return;
       }
 
       // Successfully logged in
+      setAttemptCount(0);
+      setIsOnCooldown(false);
+      setCooldownRemaining(0);
       await clearPaired();
 
       navigation.reset({
@@ -63,8 +79,40 @@ export default function LoginScreen({ navigation }) {
         routes: [{ name: "DeviceWelcome" }],
       });
     } catch (err) {
+      const newAttemptCount = attemptCount + 1;
+      setAttemptCount(newAttemptCount);
+      const cooldownDuration = calculateCooldown(newAttemptCount);
       setPassError("An error occurred. Please try again.");
+
+      if (cooldownDuration > 0) {
+        startCooldown(cooldownDuration);
+      }
     }
+  };
+
+  const calculateCooldown = (attempts) => {
+    // Cooldown increases progressively: 0-4 attempts = 0s, 5-6 attempts = 5s, 7-9 attempts = 10s, 10+ attempts = 20s
+    if (attempts < 5) return 0;
+    if (attempts < 7) return 5;
+    if (attempts < 10) return 10;
+    return 20;
+  };
+
+  const startCooldown = (duration) => {
+    if (duration === 0) return;
+    setIsOnCooldown(true);
+    setCooldownRemaining(duration);
+
+    const interval = setInterval(() => {
+      setCooldownRemaining((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          setIsOnCooldown(false);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
   };
 
   const handleForgotPassword = () => {
@@ -158,11 +206,20 @@ export default function LoginScreen({ navigation }) {
 
             <TouchableOpacity
               onPress={handleSignIn}
-              style={styles.signInBtn}
-              activeOpacity={0.85}
+              style={[styles.signInBtn, isOnCooldown && styles.signInBtnDisabled]}
+              activeOpacity={isOnCooldown ? 0.5 : 0.85}
+              disabled={isOnCooldown}
             >
-              <Text style={styles.signInText}>Sign In</Text>
+              <Text style={styles.signInText}>
+                {isOnCooldown ? `Try again in ${cooldownRemaining}s` : "Sign In"}
+              </Text>
             </TouchableOpacity>
+
+            {attemptCount > 0 && (
+              <Text style={styles.attemptText}>
+                Failed attempts: {attemptCount}
+              </Text>
+            )}
 
             <Text style={styles.footer}>
               Public Safety and Traffic Management Department
@@ -232,7 +289,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  signInBtnDisabled: { backgroundColor: "rgba(46, 120, 230, 0.5)" },
   signInText: { color: "white", fontSize: 14, fontWeight: "600" },
+  attemptText: { marginTop: 12, textAlign: "center", color: "rgba(255, 120, 120, 0.95)", fontSize: 11 },
 
   footer: { marginTop: 18, textAlign: "center", color: "rgba(255,255,255,0.55)", fontSize: 11 },
 });

@@ -1,8 +1,9 @@
-import React, { useRef, useEffect } from "react";
+import React, { useRef, useEffect, useState } from "react";
 import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { StatusBar } from "expo-status-bar";
 import * as Notifications from 'expo-notifications';
+import { Linking, ActivityIndicator, View, Text, Alert } from 'react-native';
 import supabase from './src/lib/supabase';
 
 import { AuthProvider, useAuth } from "./src/context/AuthContext";
@@ -22,12 +23,24 @@ import EmergencyBackupScreen from "./src/screens/EmergencyBackupScreen";
 
 const Stack = createNativeStackNavigator();
 
+// Deep linking configuration - kept for future use but not currently used for password reset
+const linking = {
+  prefixes: ['evvos://'],
+  config: {
+    screens: {
+      // Add other deep link screens here if needed
+    },
+  },
+};
+
 function AppNavigator() {
   const navigationRef = useRef();
   const { recoveryMode } = useAuth();
 
+  // Navigate to password reset screen when recovery mode is detected
   useEffect(() => {
     if (recoveryMode) {
+      console.log('Recovery mode detected, navigating to CreateNewPassword');
       navigationRef.current?.navigate('CreateNewPassword');
     }
   }, [recoveryMode]);
@@ -101,7 +114,7 @@ function AppNavigator() {
   }, []);
 
   return (
-    <NavigationContainer ref={navigationRef}>
+    <NavigationContainer ref={navigationRef} linking={linking}>
       <StatusBar style="light" />
       <Stack.Navigator initialRouteName="Login" screenOptions={{ headerShown: false }}>
         <Stack.Screen name="Login" component={LoginScreen} />
@@ -122,6 +135,38 @@ function AppNavigator() {
 }
 
 export default function App() {
+  const [isReady, setIsReady] = useState(false);
+
+  useEffect(() => {
+    const prepareApp = async () => {
+      try {
+        // Get initial URL (from deep link) - kept for future use
+        const initialURL = await Linking.getInitialURL();
+        if (initialURL != null) {
+          console.log('Initial URL:', initialURL);
+          // Handle any future deep linking logic here
+        }
+      } catch (e) {
+        console.error('Failed to get initial URL:', e);
+      } finally {
+        setIsReady(true);
+      }
+    };
+
+    prepareApp();
+  }, []);
+
+  if (!isReady) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#0B1A33' }}>
+        <ActivityIndicator size="large" color="#2E78E6" />
+        <Text style={{ marginTop: 16, color: '#fff', fontSize: 14 }}>
+          Loading...
+        </Text>
+      </View>
+    );
+  }
+
   return (
     <AuthProvider>
       <AppNavigator />
