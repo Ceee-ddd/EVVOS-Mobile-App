@@ -62,8 +62,12 @@ export default function HomeScreen({ navigation }) {
   };
 
   const fetchStats = async () => {
-    if (!user?.id) return;
+    if (!user?.id) {
+      console.warn('[HomeScreen] User ID not available');
+      return;
+    }
 
+    console.log('[HomeScreen] Fetching stats for user:', user.id);
     const activities = [];
 
     // Today's cases: completed incidents in last 24 hours
@@ -88,7 +92,7 @@ export default function HomeScreen({ navigation }) {
     const { count: ems } = await supabase
       .from('emergency_backups')
       .select('id', { count: 'exact' })
-      .eq('auth_user_id', user.id);
+      .eq('enforcer', displayName || `Officer ${user?.user_metadata?.full_name || 'Unknown'}`);
     setEmergencies(ems || 0);
 
     // Recent activities
@@ -112,30 +116,32 @@ export default function HomeScreen({ navigation }) {
       });
     }
 
-    // 2. Backup requested (temporary hardcoded)
-    activities.push({
-      main: 'Backup requested',
-      sub: 'Camarin Rd. • 1 hour ago',
-      dotStyle: styles.dotWarn,
-      icon: 'alert'
-    });
-
-    // 3. Latest emergency alert sent
-    const { data: latestEm } = await supabase
-      .from('emergency_backups')
-      .select('location, created_at')
-      .eq('auth_user_id', user.id)
-      .order('created_at', { ascending: false })
-      .limit(1);
-    if (latestEm && latestEm.length > 0) {
-      const em = latestEm[0];
-      const timeAgo = getAge(em.created_at);
-      activities.push({
-        main: 'Emergency alert sent',
-        sub: `${em.location || 'Unknown'} • ${timeAgo}`,
-        dotStyle: styles.dotDanger,
-        icon: 'warning'
-      });
+    // 2. Latest emergency alert sent
+    try {
+      const { data: latestEm, error: emError } = await supabase
+        .from('emergency_backups')
+        .select('location, created_at')
+        .eq('enforcer', displayName || `Officer ${user?.user_metadata?.full_name || 'Unknown'}`)
+        .order('created_at', { ascending: false })
+        .limit(1);
+      
+      if (emError) {
+        console.warn('[HomeScreen] Error fetching emergency backups:', emError);
+      } else if (latestEm && latestEm.length > 0) {
+        const em = latestEm[0];
+        const timeAgo = getAge(em.created_at);
+        activities.push({
+          main: 'Emergency alert sent',
+          sub: `${em.location || 'Unknown'} • ${timeAgo}`,
+          dotStyle: styles.dotDanger,
+          icon: 'warning'
+        });
+        console.log('[HomeScreen] Latest emergency found:', em);
+      } else {
+        console.log('[HomeScreen] No emergency backups found for user:', user.id);
+      }
+    } catch (err) {
+      console.error('[HomeScreen] Exception fetching emergency backups:', err);
     }
 
     setRecentActivities(activities);

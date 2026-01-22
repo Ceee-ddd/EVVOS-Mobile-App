@@ -16,51 +16,97 @@ export function AuthProvider({ children }) {
     const [loading, setLoading] = useState(true);
     const [rememberMe, setRememberMe] = useState(false);
     const [recoveryMode, setRecoveryMode] = useState(false);
+    const [isAuthenticated, setIsAuthenticated] = useState(false);
+    
+    // Flag to skip AsyncStorage removal during initial app load
+    const [initComplete, setInitComplete] = useState(false);
 
     // Load session + profile
     useEffect(() => {
         let mounted = true;
+        let initSessionRestored = false; // Track if init successfully restored a session
 
         const init = async () => {
             try {
-                // Load stored session
-                const storedSession = await AsyncStorage.getItem(SESSION_KEY);
-                console.log('[Init] Loaded storedSession from AsyncStorage:', !!storedSession);
+                // 1) Try getting the current session from supabase client
                 let sessionObj = null;
-                if (storedSession) {
-                    try {
-                        sessionObj = JSON.parse(storedSession);
-                        console.log('[Init] Parsed sessionObj, user ID:', sessionObj?.user?.id);
-                        // Set session in Supabase
-                        console.log('[Init] Calling supabase.auth.setSession...');
-                        await supabase.auth.setSession({
-                            access_token: sessionObj.access_token,
-                            refresh_token: sessionObj.refresh_token,
-                        });
-                        console.log('[Init] setSession completed');
-                        setSession(sessionObj);
-                        setUser(sessionObj?.user ?? null);
-                    } catch (e) {
-                        console.warn('Failed to parse stored session:', e);
-                        await AsyncStorage.removeItem(SESSION_KEY);
-                    }
-                } else {
-                    // No stored session, ensure Supabase is signed out
-                    console.log('[Init] No storedSession found in AsyncStorage, signing out...');
-                    try {
-                        await supabase.auth.signOut();
-                        console.log('[Init] Signed out from Supabase');
-                    } catch (e) {
-                        console.warn('[Init] Error during signOut:', e);
-                    }
+                try {
+                    const { data } = await supabase.auth.getSession();
+                    sessionObj = data?.session ?? null;
+                    console.log('[Init] supabase.auth.getSession returned:', !!sessionObj);
+                } catch (err) {
+                    console.warn('[Init] supabase.auth.getSession failed:', err);
+                    sessionObj = null;
                 }
 
-                // read profile (prefer RPC 'get_my_profile')
+                // 2) If supabase didn't return a session, fallback to AsyncStorage stored session
+                if (!sessionObj) {
+                    const storedSession = await AsyncStorage.getItem(SESSION_KEY);
+                    console.log('[Init] Found storedSession in AsyncStorage:', !!storedSession);
+                    if (storedSession) {
+                        try {
+                            const parsed = JSON.parse(storedSession);
+                            // restore supabase client with tokens (so onAuthStateChange will fire normally)
+                            if (parsed?.access_token || parsed?.refresh_token) {
+                                try {
+                                    await supabase.auth.setSession({
+                                        access_token: parsed.access_token,
+                                        refresh_token: parsed.refresh_token,
+                                    });
+                                    // Ideally supabase.auth.setSession triggers onAuthStateChange;
+                                    // but still assign sessionObj here so we can continue initialization now.
+                                    sessionObj = parsed;
+                                    initSessionRestored = true; // Mark that we restored a session
+                                    console.log('[Init] ✅ Restored session into supabase client from AsyncStorage.');
+                                } catch (setErr) {
+                                    console.warn('[Init] ❌ supabase.auth.setSession failed:', setErr);
+                                    // still use parsed locally so UI can consider user signed in if tokens are valid server-side
+                                    sessionObj = parsed;
+                                    initSessionRestored = true;
+                                }
+                            } else {
+                                console.warn('[Init] parsed stored session lacked tokens.');
+                            }
+                        } catch (e) {
+                            console.warn('[Init] Failed to parse stored session:', e);
+                            await AsyncStorage.removeItem(SESSION_KEY);
+                        }
+                    } else {
+                        console.log('[Init] ❌ No stored session in AsyncStorage');
+                        // no stored session: ensure Supabase is signed out server-side
+                        try {
+                            await supabase.auth.signOut();
+                            console.log('[Init] Signed out from Supabase.');
+                        } catch (e) {
+                            console.warn('[Init] signOut failed during init:', e);
+                        }
+                    }
+                } else {
+                    // Session was found from supabase.auth.getSession
+                    initSessionRestored = true;
+                }
+
+                // 3) If we have a session object (from supabase.getSession or storage), set local state
                 if (sessionObj?.user?.id) {
+                    if (!mounted) return;
+                    console.log('[Init] ✅ Session found - setting user as authenticated');
+                    console.log('[Init] User ID:', sessionObj.user.id);
+                    setSession(sessionObj);
+                    setUser(sessionObj.user ?? null);
+                    setIsAuthenticated(true);
+                    console.log('[Init] ✅ isAuthenticated set to true');
+                    console.log('[Init] set session & user from sessionObj:', sessionObj.user.id);
+
+                    // read profile (prefer RPC 'get_my_profile')
                     try {
+                        console.log('[Init] Fetching profile for user:', sessionObj.user.id);
                         const { data: rpcData, error: rpcErr } = await supabase.rpc("get_my_profile");
                         if (!rpcErr && Array.isArray(rpcData) && rpcData.length > 0) {
-                            setProfile(rpcData[0]);
+                            if (mounted) {
+                                setProfile(rpcData[0]);
+                                setBadge(rpcData[0].badge);
+                                console.log('[Init] ✅ Profile loaded from RPC');
+                            }
                         } else {
                             // fallback: select from users table
                             const { data: p, error: pErr } = await supabase
@@ -68,139 +114,239 @@ export function AuthProvider({ children }) {
                                 .select("display_name, role, first_name, last_name, badge")
                                 .eq("auth_user_id", sessionObj.user.id)
                                 .maybeSingle();
-                            if (!pErr && p) {
+                            if (!pErr && p && mounted) {
                                 setProfile(p);
                                 setBadge(p.badge);
-                            } else {
+                                console.log('[Init] ✅ Profile loaded from users table');
+                            } else if (mounted) {
+                                console.warn('[Init] No profile found for user');
                                 setProfile(null);
                                 setBadge(null);
                             }
                         }
                     } catch (err) {
                         console.warn("Profile load failed:", err);
-                        setProfile(null);
-                        setBadge(null);
+                        if (mounted) {
+                            setProfile(null);
+                            setBadge(null);
+                        }
                     }
+
+                    // register for push notifications
+                    registerForPushNotificationsAsync(sessionObj.user.id);
                 } else {
+                    console.log('[Init] ❌ No session found - user is not authenticated');
+                    console.log('[Init] ❌ isAuthenticated set to false');
+                    setIsAuthenticated(false);
                     // Not signed in: check storage for remember me
                     const savedEmail = await AsyncStorage.getItem("evvos_remember_email");
-                    if (savedEmail) setRememberMe(true);
-                }
-
-                // Register for push notifications
-                if (sessionObj?.user?.id) {
-                    registerForPushNotificationsAsync(sessionObj.user.id);
+                    if (mounted) {
+                        if (savedEmail) setRememberMe(true);
+                        setIsAuthenticated(false);
+                    }
                 }
             } catch (err) {
                 console.error("Failed to initialize auth:", err);
+            } finally {
+                // Mark init as complete so onAuthStateChange knows to remove stored sessions on logout
+                if (mounted) {
+                    setInitComplete(true);
+                }
+                
+                // Always set loading to false after init completes
+                // By this point, isAuthenticated should be set correctly
+                if (mounted) {
+                    // Add a small delay to ensure all state updates are processed
+                    setTimeout(() => {
+                        if (mounted) {
+                            setLoading(false);
+                            console.log('[Init] Loading complete');
+                        }
+                    }, 100);
+                }
             }
         };
 
         init();
 
         // subscribe to auth changes
-        const { data: sub } = supabase.auth.onAuthStateChange(async (event, session) => {
-            console.log('Auth state change:', event, session?.user?.id);
-            setSession(session ?? null);
-            setUser(session?.user ?? null);
+        const { data: sub } = supabase.auth.onAuthStateChange(async (event, newSession) => {
+            try {
+                console.log('Auth state change:', event, newSession?.user?.id);
+                // normalize: some versions return session object directly, some nested under data
+                const sess = newSession ?? null;
+                setSession(sess);
+                setUser(sess?.user ?? null);
+                setIsAuthenticated(!!sess?.user?.id);
 
-            // Set loading false on first auth state change
-            if (loading) setLoading(false);
-
-            // Store or remove session
-            if (session) {
-                console.log('[Auth Change] Storing session for user:', session?.user?.id);
-                await AsyncStorage.setItem(SESSION_KEY, JSON.stringify(session));
-                console.log('[Auth Change] Session stored in AsyncStorage');
-            } else {
-                console.log('[Auth Change] Removing stored session from AsyncStorage');
-                await AsyncStorage.removeItem(SESSION_KEY);
-                console.log('[Auth Change] Session removed from AsyncStorage');
-            }
-
-            if (event === 'PASSWORD_RECOVERY') {
-                setRecoveryMode(true);
-            } else {
-                setRecoveryMode(false);
-            }
-
-            // when signed in, fetch profile (RPC preferred)
-            if (session?.user?.id) {
-                (async () => {
+                // Store or remove session in AsyncStorage
+                // IMPORTANT: Only remove if init is complete to avoid clearing stored session on app startup
+                if (sess) {
                     try {
-                        const { data: rpcData, error: rpcErr } = await supabase.rpc("get_my_profile");
-                        if (!rpcErr && Array.isArray(rpcData) && rpcData.length > 0) {
-                            setProfile(rpcData[0]);
-                            setBadge(rpcData[0].badge);
-                            registerForPushNotificationsAsync(session.user.id);
-                        } else {
-                            const { data: p, error: pErr } = await supabase
-                                .from("users")
-                                .select("display_name, role, first_name, last_name, badge")
-                                .eq("auth_user_id", session.user.id)
-                                .maybeSingle();
-                            if (!pErr) {
-                                setProfile(p ?? null);
-                                setBadge(p?.badge ?? null);
-                                if (p) registerForPushNotificationsAsync(session.user.id);
-                            }
-                        }
+                        await AsyncStorage.setItem(SESSION_KEY, JSON.stringify(sess));
+                        console.log('[Auth Change] Stored session in AsyncStorage for user:', sess.user?.id);
                     } catch (e) {
-                        console.warn("Profile refresh failed:", e);
-                        setProfile(null);
-                        setBadge(null);
+                        console.warn('[Auth Change] Failed to write session to AsyncStorage:', e);
                     }
-                })();
-            } else {
-                setProfile(null);
-                setBadge(null);
-                // Not signed in: check storage for remember me
-                (async () => {
-                    const savedEmail = await AsyncStorage.getItem("evvos_remember_email");
-                    if (savedEmail) setRememberMe(true);
-                })();
+                } else {
+                    // Only remove from storage if init is complete (user intentionally logged out)
+                    // Don't remove during initial app startup when Supabase reports no session yet
+                    if (initComplete) {
+                        try {
+                            await AsyncStorage.removeItem(SESSION_KEY);
+                            console.log('[Auth Change] Removed session from AsyncStorage (intentional logout)');
+                        } catch (e) {
+                            console.warn('[Auth Change] Failed to remove session from AsyncStorage:', e);
+                        }
+                    } else {
+                        console.log('[Auth Change] Skipping AsyncStorage removal during init (waiting for session restoration)');
+                    }
+                }
+
+                if (event === 'PASSWORD_RECOVERY') {
+                    setRecoveryMode(true);
+                } else {
+                    setRecoveryMode(false);
+                }
+
+                // when signed in, fetch profile (RPC preferred)
+                if (sess?.user?.id) {
+                    (async () => {
+                        try {
+                            const { data: rpcData, error: rpcErr } = await supabase.rpc("get_my_profile");
+                            if (!rpcErr && Array.isArray(rpcData) && rpcData.length > 0) {
+                                setProfile(rpcData[0]);
+                                setBadge(rpcData[0].badge);
+                                registerForPushNotificationsAsync(sess.user.id);
+                            } else {
+                                const { data: p, error: pErr } = await supabase
+                                    .from("users")
+                                    .select("display_name, role, first_name, last_name, badge")
+                                    .eq("auth_user_id", sess.user.id)
+                                    .maybeSingle();
+                                if (!pErr) {
+                                    setProfile(p ?? null);
+                                    setBadge(p?.badge ?? null);
+                                    if (p) registerForPushNotificationsAsync(sess.user.id);
+                                }
+                            }
+                        } catch (e) {
+                            console.warn("Profile refresh failed:", e);
+                            setProfile(null);
+                            setBadge(null);
+                        }
+                    })();
+                } else {
+                    setProfile(null);
+                    setBadge(null);
+                    // Not signed in: check storage for remember me
+                    (async () => {
+                        const savedEmail = await AsyncStorage.getItem("evvos_remember_email");
+                        if (savedEmail) setRememberMe(true);
+                    })();
+                }
+            } catch (e) {
+                console.warn('onAuthStateChange handler error:', e);
             }
+            // DON'T set loading to false here - let the init function control that
+            // This prevents LoadingScreen from navigating before isAuthenticated is set
         });
 
         return () => {
             mounted = false;
-            sub?.subscription?.unsubscribe?.();
+            try {
+                sub?.subscription?.unsubscribe?.();
+            } catch (e) {
+                // older SDK shapes may differ
+                try {
+                    sub?.unsubscribe?.();
+                } catch (ignore) { }
+            }
         };
     }, []);
 
     const registerForPushNotificationsAsync = async (userId) => {
-        if (!userId) return;
-        console.log('Registering push notifications for user:', userId);
+        if (!userId) {
+            console.warn('No userId provided for push notifications');
+            return;
+        }
+        console.log('=== Starting FCM Registration ===');
+        console.log('User ID:', userId);
+        
         try {
-            // Request permissions for both Expo and Firebase
+            // Step 1: Request Expo Notifications permission
+            console.log('[Step 1] Requesting Expo Notifications permission...');
             const { status } = await Notifications.requestPermissionsAsync();
-            console.log('Notification permission status:', status);
+            console.log('[Step 1] Notification permission status:', status);
+            
             if (status !== 'granted') {
-                console.log('Permission not granted, skipping push token registration');
+                console.warn('[Step 1] ❌ Expo permission NOT granted. Status:', status);
                 return;
             }
+            console.log('[Step 1] ✅ Expo permission granted');
 
-            // Also request Firebase messaging permission
+            // Step 2: Request Firebase Messaging permission
+            console.log('[Step 2] Requesting Firebase Messaging permission...');
             const authStatus = await messaging().requestPermission();
+            console.log('[Step 2] Firebase auth status:', authStatus);
+            
             const enabled =
                 authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
                 authStatus === messaging.AuthorizationStatus.PROVISIONAL;
+            
             if (!enabled) {
-                console.log('Firebase messaging permission not granted');
+                console.warn('[Step 2] ❌ Firebase permission NOT granted. Status:', authStatus);
                 return;
             }
+            console.log('[Step 2] ✅ Firebase permission granted');
 
-            // Get FCM token
+            // Step 3: Get FCM token
+            console.log('[Step 3] Retrieving FCM token...');
             const fcmToken = await messaging().getToken();
-            console.log('Retrieved FCM token:', fcmToken);
-            const { error } = await supabase.from('users').update({ push_token: fcmToken }).eq('auth_user_id', userId);
-            if (error) {
-                console.error('Error updating push_token in database:', error);
-            } else {
-                console.log('Push token updated successfully in database');
+            console.log('[Step 3] FCM Token retrieved:', fcmToken ? `${fcmToken.substring(0, 20)}...` : 'EMPTY');
+            
+            if (!fcmToken) {
+                console.warn('[Step 3] ❌ FCM token is empty or undefined');
+                return;
             }
+            console.log('[Step 3] ✅ FCM token obtained');
+
+            // Step 4: Save to Supabase
+            console.log('[Step 4] Saving FCM token to Supabase...');
+            console.log('[Step 4] Update query: UPDATE users SET push_token=? WHERE auth_user_id=?');
+            
+            const { data, error } = await supabase
+                .from('users')
+                .update({ push_token: fcmToken })
+                .eq('auth_user_id', userId)
+                .select();
+            
+            if (error) {
+                console.error('[Step 4] ❌ Database error:', {
+                    message: error.message,
+                    code: error.code,
+                    details: error.details,
+                    hint: error.hint
+                });
+                return;
+            }
+            
+            if (!data || data.length === 0) {
+                console.warn('[Step 4] ⚠️  No rows updated. User might not exist in database');
+                return;
+            }
+            
+            console.log('[Step 4] ✅ Push token saved successfully');
+            console.log('[Step 4] Updated records:', data.length);
+            console.log('=== FCM Registration Complete ===');
+            
         } catch (err) {
-            console.error('Push notification setup failed:', err);
+            console.error('=== FCM Registration Failed ===');
+            console.error('Error:', {
+                message: err?.message,
+                code: err?.code,
+                stack: err?.stack
+            });
         }
     };
 
@@ -209,8 +355,19 @@ export function AuthProvider({ children }) {
             const { data: authData, error: authErr } = await supabase.auth.signInWithPassword({ email, password });
             if (authErr) throw authErr;
 
-            setSession(authData.session);
+            const sess = authData.session;
+            setSession(sess);
             setUser(authData.user);
+
+            // Ensure we persist session immediately
+            try {
+                if (sess) {
+                    await AsyncStorage.setItem(SESSION_KEY, JSON.stringify(sess));
+                    console.log('[Login] Persisted session to AsyncStorage for user:', authData.user?.id);
+                }
+            } catch (e) {
+                console.warn('[Login] Failed to persist session:', e);
+            }
 
             // fetch profile via RPC or fallback
             if (authData.user?.id) {
@@ -326,11 +483,11 @@ export function AuthProvider({ children }) {
         loading,
         rememberMe,
         recoveryMode,
+        isAuthenticated,
         login,
         loginByBadge,
         logout,
         resetPasswordForEmail,
-        isAuthenticated: !!session,
     };
 
     return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

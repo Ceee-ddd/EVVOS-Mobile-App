@@ -10,7 +10,6 @@ import {
   Platform,
   Modal,
   Pressable,
-  Alert,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
@@ -38,6 +37,7 @@ export default function IncidentSummaryScreen({ navigation, route }) {
 
   const [closeOpen, setCloseOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [alertModal, setAlertModal] = useState({ visible: false, title: "", message: "" });
 
   const commonViolations = useMemo(
     () => [
@@ -102,12 +102,12 @@ export default function IncidentSummaryScreen({ navigation, route }) {
 
   const handleFinalize = async () => {
     if (!driverName.trim() || !plateNumber.trim()) {
-      Alert.alert("Error", "Driver name and plate number are required.");
+      setAlertModal({ visible: true, title: "Error", message: "Driver name and plate number are required." });
       return;
     }
 
     if (!user?.id) {
-      Alert.alert("Error", "User not logged in.");
+      setAlertModal({ visible: true, title: "Error", message: "User not logged in." });
       return;
     }
 
@@ -147,16 +147,16 @@ export default function IncidentSummaryScreen({ navigation, route }) {
         } catch (e) {
           console.log("Could not read response body:", e);
         }
-        Alert.alert("Error", "Failed to submit report. Please try again.");
+        setAlertModal({ visible: true, title: "Error", message: "Failed to submit report. Please try again." });
       } else if (data?.success) {
         navigation.popToTop();
       } else {
-        Alert.alert("Error", "Failed to submit report. Please try again.");
+        setAlertModal({ visible: true, title: "Error", message: "Failed to submit report. Please try again." });
       }
     } catch (err) {
       console.error("Unexpected error:", err);
       console.log("Caught error details:", JSON.stringify(err, null, 2));
-      Alert.alert("Error", "Failed to submit report. Please try again.");
+      setAlertModal({ visible: true, title: "Error", message: "Failed to submit report. Please try again." });
     } finally {
       setSubmitting(false);
     }
@@ -202,19 +202,19 @@ export default function IncidentSummaryScreen({ navigation, route }) {
         } catch (e) {
           console.log("Could not read response body:", e);
         }
-        Alert.alert("Error", "Failed to save draft. Please try again.");
+        setAlertModal({ visible: true, title: "Error", message: "Failed to save draft. Please try again." });
         setSubmitting(false);
         return;
       } else if (data?.success) {
         navigation.navigate("Home");
       } else {
-        Alert.alert("Error", "Failed to save draft. Please try again.");
+        setAlertModal({ visible: true, title: "Error", message: "Failed to save draft. Please try again." });
         setSubmitting(false);
       }
     } catch (err) {
       console.error("Unexpected error:", err);
       console.log("Caught error details:", JSON.stringify(err, null, 2));
-      Alert.alert("Error", "Failed to save draft. Please try again.");
+      setAlertModal({ visible: true, title: "Error", message: "Failed to save draft. Please try again." });
       setSubmitting(false);
     }
   };
@@ -524,6 +524,46 @@ export default function IncidentSummaryScreen({ navigation, route }) {
                 </Pressable>
               </Pressable>
             </Modal>
+
+            <Modal
+              visible={alertModal.visible}
+              transparent
+              animationType="fade"
+              onRequestClose={() => setAlertModal({ ...alertModal, visible: false })}
+            >
+              <Pressable
+                style={styles.modalBackdrop}
+                onPress={() => setAlertModal({ ...alertModal, visible: false })}
+              >
+                <Pressable
+                  style={[styles.modalCard, styles.modalRedBorder]}
+                  onPress={() => {}}
+                >
+                  <View style={styles.modalTopRow}>
+                    <View style={[styles.modalIconCircle, styles.modalIconRed]}>
+                      <Ionicons name="warning-outline" size={18} color="#FF4A4A" />
+                    </View>
+                    <Text style={styles.modalTitleText}>
+                      {alertModal.title}
+                    </Text>
+                  </View>
+
+                  <Text style={styles.modalBodyText}>
+                    {alertModal.message}
+                  </Text>
+
+                  <View style={styles.modalBtnRow}>
+                    <TouchableOpacity
+                      style={[styles.modalBtn, styles.modalBtnCancel]}
+                      activeOpacity={0.9}
+                      onPress={() => setAlertModal({ ...alertModal, visible: false })}
+                    >
+                      <Text style={styles.modalBtnCancelText}>OK</Text>
+                    </TouchableOpacity>
+                  </View>
+                </Pressable>
+              </Pressable>
+            </Modal>
           </View>
         </KeyboardAvoidingView>
       </SafeAreaView>
@@ -788,6 +828,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   modalGreenBorder: { borderColor: "rgba(61,220,132,0.55)" },
+  modalRedBorder: { borderColor: "rgba(255,80,80,0.35)" },
 
   modalTopRow: {
     flexDirection: "row",
@@ -802,6 +843,9 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(61,220,132,0.12)",
     alignItems: "center",
     justifyContent: "center",
+  },
+  modalIconRed: {
+    backgroundColor: "rgba(255,80,80,0.12)",
   },
   modalTitleText: {
     color: "rgba(255,255,255,0.92)",

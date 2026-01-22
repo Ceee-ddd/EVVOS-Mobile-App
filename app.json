@@ -23,16 +23,41 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "package": "com.evvosdev.EVVOS"
+      "package": "com.evvosdev.EVVOS",
+      "permissions": [
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
+    "plugins": [
+      [
+        "@react-native-firebase/app",
+        {
+          "android": {
+            "googleServicesFile": "./google-services.json"
+          }
+        }
+      ],
+      [
+        "@react-native-firebase/messaging",
+        {
+          "android": {
+            "soundName": "default",
+            "channelId": "emergency_alerts",
+            "channelDescription": "Emergency backup alerts"
+          }
+        }
+      ]
+    ],
     "extra": {
       "eas": {
         "projectId": "a4f4a0b4-dc4f-44bf-8dc5-60c51b43d1d8"
       }
     },
-    "owner": "evvosdev"
+    "owner": "evvosapp-dev"
   }
 }

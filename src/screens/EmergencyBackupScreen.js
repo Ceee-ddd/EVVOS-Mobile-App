@@ -9,25 +9,59 @@ import supabase from '../lib/supabase';
 export default function EmergencyBackupScreen({ navigation, route }) {
   const [backupData, setBackupData] = useState(route?.params?.backupData);
   const [status, setStatus] = useState("En Route"); // "On Scene"
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (route?.params?.request_id && !backupData) {
+    const requestId = route?.params?.request_id;
+    console.log('[EmergencyBackupScreen] Mounted with request_id:', requestId);
+    console.log('[EmergencyBackupScreen] Initial backupData:', backupData);
+    
+    if (requestId) {
+      setLoading(true);
       const fetchData = async () => {
-        const { data, error } = await supabase.from('emergency_backups').select('*').eq('request_id', route.params.request_id).single();
-        if (!error && data) {
-          setBackupData({
-            enforcer: data.enforcer,
-            location: data.location,
-            time: data.time,
-            responders: data.responders,
-            coords: { latitude: 14.7566, longitude: 121.0447 },
-            request_id: data.request_id
-          });
+        try {
+          console.log('[EmergencyBackupScreen] Fetching backup details for request_id:', requestId);
+          const { data, error } = await supabase
+            .from('emergency_backups')
+            .select('*')
+            .eq('request_id', requestId)
+            .single();
+          
+          if (error) {
+            console.error('[EmergencyBackupScreen] Error fetching data:', error);
+            return;
+          }
+          
+          if (data) {
+            console.log('[EmergencyBackupScreen] ✅ Data fetched successfully:', {
+              enforcer: data.enforcer,
+              location: data.location,
+              responders: data.responders,
+              status: data.status,
+            });
+            
+            setBackupData({
+              enforcer: data.enforcer,
+              location: data.location,
+              time: data.time,
+              responders: data.responders,
+              coords: { latitude: 14.7566, longitude: 121.0447 },
+              request_id: data.request_id,
+              status: data.status,
+            });
+          } else {
+            console.warn('[EmergencyBackupScreen] No data found for request_id:', requestId);
+          }
+        } catch (err) {
+          console.error('[EmergencyBackupScreen] Fetch error:', err);
+        } finally {
+          setLoading(false);
         }
       };
+      
       fetchData();
     }
-  }, [route?.params?.request_id, backupData]);
+  }, [route?.params?.request_id]);
 
   const coords = backupData?.coords || { latitude: 14.7566, longitude: 121.0447 };
   const name = backupData?.enforcer ?? "Juan Bartolome";
@@ -35,6 +69,43 @@ export default function EmergencyBackupScreen({ navigation, route }) {
   const time = backupData?.time ?? "8:21 pm";
   const responders = backupData?.responders ?? 4;
   const requestId = backupData?.request_id;
+
+  // Refresh function to get latest data
+  const handleRefresh = async () => {
+    if (requestId) {
+      setLoading(true);
+      try {
+        console.log('[EmergencyBackupScreen] Refreshing data...');
+        const { data, error } = await supabase
+          .from('emergency_backups')
+          .select('*')
+          .eq('request_id', requestId)
+          .single();
+        
+        if (error) {
+          console.error('[EmergencyBackupScreen] Refresh error:', error);
+          return;
+        }
+        
+        if (data) {
+          console.log('[EmergencyBackupScreen] ✅ Data refreshed:', { responders: data.responders });
+          setBackupData({
+            enforcer: data.enforcer,
+            location: data.location,
+            time: data.time,
+            responders: data.responders,
+            coords: { latitude: 14.7566, longitude: 121.0447 },
+            request_id: data.request_id,
+            status: data.status,
+          });
+        }
+      } catch (err) {
+        console.error('[EmergencyBackupScreen] Refresh failed:', err);
+      } finally {
+        setLoading(false);
+      }
+    }
+  };
 
   return (
     <LinearGradient
@@ -46,7 +117,13 @@ export default function EmergencyBackupScreen({ navigation, route }) {
       <SafeAreaView style={styles.safe}>
         <View style={styles.container}>
           <View style={styles.topHeader}>
-            <Text style={styles.headerTitle}>Emergency Backup</Text>
+            <View style={styles.headerRow}>
+              <Text style={styles.headerTitle}>Emergency Backup</Text>
+              <TouchableOpacity onPress={handleRefresh} activeOpacity={0.7}>
+                <Ionicons name="refresh" size={18} color="rgba(255,255,255,0.85)" />
+              </TouchableOpacity>
+            </View>
+            <Text style={styles.sentByText}>Sent by {name}</Text>
           </View>
 
           
@@ -180,7 +257,9 @@ const styles = StyleSheet.create({
   },
 
   topHeader: { alignItems: "center", marginBottom: 6 },
-  headerTitle: { color: "rgba(255,255,255,0.90)", fontSize: 13, fontWeight: "700" },
+  headerRow: { flexDirection: "row", alignItems: "center", justifyContent: "center", width: "100%" },
+  headerTitle: { color: "rgba(255,255,255,0.90)", fontSize: 13, fontWeight: "700", flex: 1, textAlign: "center" },
+  sentByText: { color: "rgba(255,255,255,0.65)", fontSize: 11, marginTop: 4, fontStyle: "italic" },
 
   card: {
     backgroundColor: "rgba(0,0,0,0.18)",

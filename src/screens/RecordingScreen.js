@@ -7,7 +7,6 @@ import {
   ScrollView,
   Modal,
   Pressable,
-  BackHandler,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
@@ -22,9 +21,9 @@ export default function RecordingScreen({ navigation, route }) {
   const [markCount, setMarkCount] = useState(0);
   
   const [emergencyConfirmOpen, setEmergencyConfirmOpen] = useState(false);
-
-
   const [stopOpen, setStopOpen] = useState(false);
+  const [resolveConfirmOpen, setResolveConfirmOpen] = useState(false);
+  const [alertModal, setAlertModal] = useState({ visible: false, title: "", message: "", type: "info" });
 
   const { profile, user } = useContext(AuthContext);
   const [backupData, setBackupData] = useState(null);
@@ -34,14 +33,6 @@ export default function RecordingScreen({ navigation, route }) {
   useEffect(() => {
     const t = setInterval(() => setSeconds((s) => s + 1), 1000);
     return () => clearInterval(t);
-  }, []);
-
-  useEffect(() => {
-    const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
-      handleStop();
-      return true;
-    });
-    return () => backHandler.remove();
   }, []);
 
   
@@ -83,6 +74,10 @@ export default function RecordingScreen({ navigation, route }) {
   
   const confirmEmergency = async () => {
     setEmergencyConfirmOpen(false);
+    console.log('[RecordingScreen] Emergency backup initiated');
+    console.log('[RecordingScreen] User ID:', user?.id);
+    console.log('[RecordingScreen] User profile:', profile);
+
     const badge = profile?.badge || '4521';
     const random = Math.floor(Math.random() * 100).toString().padStart(2, '0');
     const request_id = `REQ${badge}${random}`;
@@ -91,40 +86,118 @@ export default function RecordingScreen({ navigation, route }) {
     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const responders = 0;
     const coords = { latitude: 14.7566, longitude: 121.0447 };
-    try {
-      const { error } = await supabase.from('emergency_backups').insert({
-        request_id,
-        enforcer,
-        location,
-        time,
-        responders,
-        auth_user_id: user.id
-      });
-      if (error) throw error;
 
-      // Send push notifications to other users
-      const sessionData = await supabase.auth.getSession();
-      const session = sessionData.data.session;
-      await fetch('https://zekbonbxwccgsfagrrph.supabase.co/functions/v1/send-emergency-notification', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({
+    console.log('[RecordingScreen] Emergency backup data:', {
+      request_id,
+      enforcer,
+      location,
+      time,
+      responders,
+    });
+
+    try {
+      // Step 1: Insert into emergency_backups table
+      console.log('[RecordingScreen] Inserting emergency backup into database...');
+      const { data: insertData, error: insertError } = await supabase
+        .from('emergency_backups')
+        .insert({
           request_id,
           enforcer,
           location,
           time,
-        }),
-      });
+          responders,
+        });
 
-      alert('Emergency backup request sent to nearby units.');
+      if (insertError) {
+        console.error('[RecordingScreen] Insert error:', insertError);
+        console.error('[RecordingScreen] Error details:', {
+          message: insertError.message,
+          code: insertError.code,
+          hint: insertError.hint,
+        });
+        throw insertError;
+      }
+
+      console.log('[RecordingScreen] Emergency backup inserted successfully:', insertData);
+
+      // Step 2: Get session for push notification
+      console.log('[RecordingScreen] Getting session for push notification...');
+      const sessionData = await supabase.auth.getSession();
+      const session = sessionData?.data?.session;
+
+      if (!session) {
+        console.error('[RecordingScreen] No session available for push notification');
+        throw new Error('No active session');
+      }
+
+      console.log('[RecordingScreen] Session retrieved, access token present:', !!session.access_token);
+
+      // Step 3: Send push notifications
+      console.log('[RecordingScreen] Sending push notification...');
+      const notificationPayload = {
+        request_id,
+        enforcer,
+        location,
+        time,
+        triggered_by_user_id: user?.id,
+      };
+      console.log('[RecordingScreen] Notification payload:', notificationPayload);
+
+      const supabaseAnonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inpla2JvbmJ4d2NjZ3NmYWdycnBoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgzOTQyOTUsImV4cCI6MjA4Mzk3MDI5NX0.0ss5U-uXryhWGf89ucndqNK8-Bzj_GRZ-4-Xap6ytHg";
+
+      console.log('[RecordingScreen] Calling edge function endpoint...');
+      const notificationResponse = await fetch(
+        'https://zekbonbxwccgsfagrrph.supabase.co/functions/v1/send-emergency-notification',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${supabaseAnonKey}`,
+          },
+          body: JSON.stringify(notificationPayload),
+        }
+      );
+
+      console.log('[RecordingScreen] Fetch call completed');
+      console.log('[RecordingScreen] Response status:', notificationResponse.status);
+
+      console.log('[RecordingScreen] Notification response status:', notificationResponse.status);
+
+      if (!notificationResponse.ok) {
+        const errorText = await notificationResponse.text();
+        console.error('[RecordingScreen] Notification error response:', errorText);
+        console.warn('[RecordingScreen] Push notification failed, but emergency backup was recorded');
+      } else {
+        const notificationData = await notificationResponse.json();
+        console.log('[RecordingScreen] ✅ Push notification sent successfully!');
+        console.log('[RecordingScreen] Notifications sent to:', notificationData.sent, 'users');
+        console.log('[RecordingScreen] Total users notified:', notificationData.total);
+        console.log('[RecordingScreen] Response:', notificationData);
+      }
+
+      console.log('[RecordingScreen] Emergency backup completed successfully');
+      setAlertModal({
+        visible: true,
+        title: "Success",
+        message: "Emergency backup request sent to nearby units.",
+        type: "success"
+      });
       setEmergencyTriggered(true);
       setCurrentRequestId(request_id);
     } catch (err) {
-      console.error('Failed to send emergency backup:', err);
-      alert('Failed to send request. Please try again.');
+      console.error('[RecordingScreen] Failed to send emergency backup:', err);
+      console.error('[RecordingScreen] Error stack:', err.stack);
+      console.error('[RecordingScreen] Error details:', {
+        message: err?.message,
+        code: err?.code,
+        response: err?.response,
+      });
+      setAlertModal({
+        visible: true,
+        title: "Error",
+        message: `Failed to send request: ${err?.message || 'Unknown error'}`,
+        type: "error"
+      });
     }
   };
 
@@ -138,10 +211,10 @@ export default function RecordingScreen({ navigation, route }) {
       if (error) throw error;
       setEmergencyTriggered(false);
       setCurrentRequestId(null);
-      alert('Emergency resolved.');
+      setAlertModal({ visible: true, title: "Resolved", message: "Emergency resolved.", type: "success" });
     } catch (err) {
       console.error('Failed to resolve emergency:', err);
-      alert('Failed to resolve. Try again.');
+      setAlertModal({ visible: true, title: "Error", message: "Failed to resolve. Try again.", type: "error" });
     }
   };
 
@@ -263,7 +336,7 @@ export default function RecordingScreen({ navigation, route }) {
           <TouchableOpacity
             style={[styles.emergencyBtn, emergencyTriggered && styles.emergencyBtnResolved]}
             activeOpacity={0.9}
-            onPress={emergencyTriggered ? resolveEmergency : handleEmergency}
+            onPress={emergencyTriggered ? () => setResolveConfirmOpen(true) : handleEmergency}
           >
             <Ionicons name={emergencyTriggered ? "checkmark-circle-outline" : "warning-outline"} size={16} color="white" />
             <Text style={styles.emergencyText}>{emergencyTriggered ? "Resolved" : "Emergency Backup"}</Text>
@@ -382,6 +455,95 @@ export default function RecordingScreen({ navigation, route }) {
                     onPress={confirmStop}
                   >
                     <Text style={styles.modalBtnConfirmText}>Confirm</Text>
+                  </TouchableOpacity>
+                </View>
+              </Pressable>
+            </Pressable>
+          </Modal>
+
+          <Modal
+            visible={resolveConfirmOpen}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setResolveConfirmOpen(false)}
+          >
+            <Pressable
+              style={styles.modalBackdrop}
+              onPress={() => setResolveConfirmOpen(false)}
+            >
+              <Pressable
+                style={[styles.modalCard, styles.modalGreenBorder]}
+                onPress={() => {}}
+              >
+                <View style={styles.modalHeaderRow}>
+                  <View style={styles.modalHeaderLeft}>
+                    <Ionicons name="checkmark-circle-outline" size={18} color="#3DDC84" />
+                    <Text style={styles.modalTitle}>Resolve Emergency</Text>
+                  </View>
+                </View>
+
+                <Text style={styles.modalBodyText}>
+                  Are you sure you want to mark this emergency as resolved? This action cannot be undone.
+                </Text>
+
+                <View style={styles.modalBtnRow}>
+                  <TouchableOpacity
+                    style={[styles.modalBtn, styles.modalBtnCancel]}
+                    activeOpacity={0.9}
+                    onPress={() => setResolveConfirmOpen(false)}
+                  >
+                    <Text style={styles.modalBtnCancelText}>Cancel</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.modalBtn, styles.modalBtnConfirm]}
+                    activeOpacity={0.9}
+                    onPress={() => {
+                      setResolveConfirmOpen(false);
+                      resolveEmergency();
+                    }}
+                  >
+                    <Text style={styles.modalBtnConfirmText}>Confirm</Text>
+                  </TouchableOpacity>
+                </View>
+              </Pressable>
+            </Pressable>
+          </Modal>
+
+          <Modal
+            visible={alertModal.visible}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setAlertModal({ ...alertModal, visible: false })}
+          >
+            <Pressable
+              style={styles.modalBackdrop}
+              onPress={() => setAlertModal({ ...alertModal, visible: false })}
+            >
+              <Pressable
+                style={[styles.modalCard, alertModal.type === "error" ? styles.modalRedBorder : styles.modalGreenBorder]}
+                onPress={() => {}}
+              >
+                <View style={styles.modalHeaderRow}>
+                  <View style={styles.modalHeaderLeft}>
+                    <Ionicons
+                      name={alertModal.type === "error" ? "warning-outline" : "checkmark-circle-outline"}
+                      size={18}
+                      color={alertModal.type === "error" ? "#FF4A4A" : "#3DDC84"}
+                    />
+                    <Text style={styles.modalTitle}>{alertModal.title}</Text>
+                  </View>
+                </View>
+
+                <Text style={styles.modalBodyText}>{alertModal.message}</Text>
+
+                <View style={styles.modalBtnRow}>
+                  <TouchableOpacity
+                    style={[styles.modalBtn, styles.modalBtnCancel]}
+                    activeOpacity={0.9}
+                    onPress={() => setAlertModal({ ...alertModal, visible: false })}
+                  >
+                    <Text style={styles.modalBtnCancelText}>OK</Text>
                   </TouchableOpacity>
                 </View>
               </Pressable>
@@ -638,6 +800,7 @@ const styles = StyleSheet.create({
   },
   modalRedBorder: { borderColor: "rgba(255,80,80,0.45)" },
   modalOrangeBorder: { borderColor: "rgba(255,176,32,0.40)" },
+  modalGreenBorder: { borderColor: "rgba(61,220,132,0.55)" },
 
   modalHeaderRow: {
     flexDirection: "row",
