@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -14,55 +14,114 @@ import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { setPaired } from "../utils/deviceStore";
 import { useAuth } from "../context/AuthContext";
+import {
+  checkExistingCredentials,
+  createProvisioningToken,
+  sendCredentialsToPi,
+  pollProvisioningStatus,
+} from "../utils/provisioningService";
 
 export default function DevicePairingFlowScreen({ navigation }) {
-  const { displayName, badge, logout } = useAuth();
-  const [step, setStep] = useState(1); // 1..6
+  const { displayName, badge, logout, user, session } = useAuth();
+  // Steps: 0=check, 1=intro, 2=create token, 3=connect AP, 4=enter creds, 5=send creds, 6=polling, 7=complete
+  const [step, setStep] = useState(0);
   const [ssid, setSsid] = useState("");
   const [pw, setPw] = useState("");
   const [showPw, setShowPw] = useState(false);
+  const [token, setToken] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
   const timerRef = useRef(null);
 
-  const steps = useMemo(
-    () => [
-      {
-        id: 1,
-        title: "Step 1",
-        body: "Turn on the E.V.V.O.S device by pressing and holding the button for 5 seconds.",
-        icon: "power-outline",
-      },
-      {
-        id: 2,
-        title: "Step 2",
-        body:
-          "Go to your mobile phone’s Wi-Fi settings and connect to your E.V.V.O.S device network: Evvos_XXXX (XXXX is the last four digits).",
-        icon: "wifi-outline",
-      },
-      {
-        id: 3,
-        title: "Step 3",
-        body:
-          "After connecting to the E.V.V.O.S device, go to your hotspot settings, add a password (if not already), and turn it on.",
-        icon: "cellular-outline",
-      },
-    ],
-    []
-  );
-
+  // Check for existing credentials on mount
   useEffect(() => {
-    if (step === 5) {
-      timerRef.current = setTimeout(async () => {
-        await setPaired(true);
-        setStep(6);
-      }, 2200);
-    }
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
+    const checkCredentials = async () => {
+      if (!user?.id) return;
+      
+      try {
+        const hasCredentials = await checkExistingCredentials(user.id);
+        if (hasCredentials) {
+          // Skip pairing flow
+          await setPaired(true);
+          setStep(7); // go to complete
+        } else {
+          setStep(1); // start intro
+        }
+      } catch (err) {
+        console.error("Error checking credentials:", err);
+        setStep(1); // start intro on error
+      }
     };
-  }, [step]);
 
-  const goNext = () => {
-    if (step < 6) setStep((s) => s + 1);
+    checkCredentials();
+  }, [user?.id]);
+
+  // Handle polling for provisioning completion
+  useEffect(() => {
+    if (step !== 6) return; // Only run during polling step
+
+    const startPolling = async () => {
+      if (!token) return;
+
+      try {
+        const completed = await pollProvisioningStatus(token);
+
+        if (completed) {
+          await setPaired(true);
+          setStep(7); // Complete
+        } else {
+          setError("Provisioning timeout. Please try again.");
+          setStep(5); // Go back to send step
+        }
+      } catch (err) {
+        console.error("Polling error:", err);
+        setError(err.message);
+        setStep(5);
+      }
+    };
+
+    startPolling();
+  }, [step, token]);
+
+  const handleCreateToken = async () => {
+    if (!session?.access_token) {
+      setError("No authentication token available");
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const { token: provToken } = await createProvisioningToken(
+        session.access_token
+      );
+      setToken(provToken);
+      setStep(3); // Move to connect step
+    } catch (err) {
+      setError(err.message || "Failed to create provisioning token");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSendCredentials = async () => {
+    if (!token || !ssid || !pw) {
+      setError("SSID and password are required");
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      await sendCredentialsToPi(token, ssid, pw);
+      setStep(5); // Move to send confirmation step
+    } catch (err) {
+      setError(err.message || "Failed to send credentials to device");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const goDashboard = () => {
@@ -112,41 +171,76 @@ export default function DevicePairingFlowScreen({ navigation }) {
   };
 
   const renderContent = () => {
-    if (step >= 1 && step <= 3) {
-      const s = steps.find((x) => x.id === step);
+    // Step 1: Intro - before connecting to Pi
+    if (step === 1) {
       return (
         <>
-          <Text style={styles.stepText}>{s.title}</Text>
-          <Text style={styles.bodyText}>{s.body}</Text>
+          <Text style={styles.stepText}>Device Pairing</Text>
+          <Text style={styles.bodyText}>
+            Do not turn on your phone hotspot yet. First tap 'Create pairing token', then connect your phone to EVVOS_0001.
+          </Text>
 
           <View style={styles.imageBox}>
-            <Ionicons name={s.icon} size={64} color="rgba(255,255,255,0.85)" />
+            <Ionicons name="wifi-outline" size={64} color="rgba(255,255,255,0.85)" />
           </View>
 
-          <Text style={styles.hintText}>
-            {step === 1
-              ? "Is your E.V.V.O.S device ready to pair?"
-              : step === 2
-              ? "Already connected to the device’s network?"
-              : "Done configuring portable hotspot?"}
-          </Text>
-              
-          <TouchableOpacity style={styles.primaryBtn} activeOpacity={0.9} onPress={goNext}>
-            <View style={styles.btnIconCircle}>
-            <Ionicons name="chevron-forward" size={25} color="white" />
-          </View>
-            <Text style={styles.primaryText}>Next</Text>
+          {error && <Text style={styles.errorText}>{error}</Text>}
+
+          <TouchableOpacity 
+            style={styles.primaryBtn} 
+            activeOpacity={0.9} 
+            onPress={handleCreateToken}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator size="small" color="white" />
+            ) : (
+              <>
+                <View style={styles.btnIconCircle}>
+                  <Ionicons name="key-outline" size={20} color="white" />
+                </View>
+                <Text style={styles.primaryText}>Create Pairing Token</Text>
+              </>
+            )}
           </TouchableOpacity>
         </>
       );
     }
 
-    if (step === 4) {
+    // Step 2: Token created, waiting for connection (auto-advance)
+    if (step === 2) {
       return (
         <>
-          <Text style={styles.stepText}>Step 4</Text>
+          <Text style={styles.stepText}>Connect to Device</Text>
           <Text style={styles.bodyText}>
-            Enter your hotspot SSID and password. The device will connect and pair automatically.
+            Turn on the E.V.V.O.S device and wait for the EVVOS_0001 network to appear. Then connect your phone to it.
+          </Text>
+
+          <View style={styles.imageBox}>
+            <Ionicons name="phone-portrait-outline" size={64} color="rgba(255,255,255,0.85)" />
+          </View>
+
+          <TouchableOpacity 
+            style={styles.primaryBtn} 
+            activeOpacity={0.9} 
+            onPress={() => setStep(3)}
+          >
+            <View style={styles.btnIconCircle}>
+              <Ionicons name="chevron-forward" size={25} color="white" />
+            </View>
+            <Text style={styles.primaryText}>Connected to Device</Text>
+          </TouchableOpacity>
+        </>
+      );
+    }
+
+    // Step 3: Connected, ready for credentials
+    if (step === 3) {
+      return (
+        <>
+          <Text style={styles.stepText}>Enter Hotspot Credentials</Text>
+          <Text style={styles.bodyText}>
+            Enter your phone Hotspot name (SSID) and password. This is the hotspot you will turn on after sending to EVVOS. Example: 'JohnPhoneHotspot'
           </Text>
 
           <Text style={styles.label}>Hotspot SSID</Text>
@@ -157,10 +251,11 @@ export default function DevicePairingFlowScreen({ navigation }) {
               placeholder="Enter SSID"
               placeholderTextColor="rgba(255,255,255,0.35)"
               style={styles.input}
+              editable={!loading}
             />
           </View>
 
-          <Text style={[styles.label, { marginTop: 10 }]}>Hotspot Password</Text>
+          <Text style={[styles.label, { marginTop: 14 }]}>Hotspot Password</Text>
           <View style={styles.inputWrap}>
             <TextInput
               value={pw}
@@ -169,6 +264,7 @@ export default function DevicePairingFlowScreen({ navigation }) {
               placeholderTextColor="rgba(255,255,255,0.35)"
               secureTextEntry={!showPw}
               style={styles.input}
+              editable={!loading}
             />
             <TouchableOpacity onPress={() => setShowPw((v) => !v)} activeOpacity={0.8}>
               <Ionicons
@@ -180,22 +276,70 @@ export default function DevicePairingFlowScreen({ navigation }) {
           </View>
 
           <Text style={styles.smallNote}>Case and space sensitive</Text>
-          <Text style={styles.hintText}>Make sure the SSID and password are correct.</Text>
+          
+          {error && <Text style={styles.errorText}>{error}</Text>}
 
-          <TouchableOpacity style={styles.primaryBtn} activeOpacity={0.9} onPress={() => setStep(5)}>
-            <View style={styles.btnIconCircle}>
-            <Ionicons name="chevron-forward" size={25} color="white" />
-            </View>
-            <Text style={styles.primaryText}>Pair Device</Text>
+          <TouchableOpacity 
+            style={styles.primaryBtn} 
+            activeOpacity={0.9} 
+            onPress={handleSendCredentials}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator size="small" color="white" />
+            ) : (
+              <>
+                <View style={styles.btnIconCircle}>
+                  <Ionicons name="send-outline" size={20} color="white" />
+                </View>
+                <Text style={styles.primaryText}>Send to EVVOS</Text>
+              </>
+            )}
           </TouchableOpacity>
         </>
       );
     }
 
+    // Step 4: Placeholder (auto-advance to step 5)
+    if (step === 4) {
+      return null;
+    }
+
+    // Step 5: Instructions to turn on hotspot
     if (step === 5) {
       return (
+        <>
+          <Text style={styles.stepText}>Turn On Hotspot</Text>
+          <Text style={styles.bodyText}>
+            Now turn on your phone's Hotspot (SSID: {ssid}). When you turn it on, your phone will disconnect from EVVOS_0001 — open the app again after one minute to continue. You'll be notified when provisioning is complete.
+          </Text>
+
+          <View style={styles.imageBox}>
+            <Ionicons name="cellular-outline" size={64} color="rgba(255,255,255,0.85)" />
+          </View>
+
+          {error && <Text style={styles.errorText}>{error}</Text>}
+
+          <TouchableOpacity 
+            style={styles.primaryBtn} 
+            activeOpacity={0.9} 
+            onPress={() => setStep(6)}
+          >
+            <View style={styles.btnIconCircle}>
+              <Ionicons name="play-outline" size={20} color="white" />
+            </View>
+            <Text style={styles.primaryText}>Check Status</Text>
+          </TouchableOpacity>
+        </>
+      );
+    }
+
+    // Step 6: Polling for completion
+    if (step === 6) {
+      return (
         <View style={{ alignItems: "center", marginTop: 34 }}>
-          <Text style={styles.pairingTitle}>Device pairing…</Text>
+          <Text style={styles.pairingTitle}>Provisioning…</Text>
+          <Text style={styles.bodyText}>Checking device status.</Text>
 
           <View style={[styles.imageBox, { marginTop: 18 }]}>
             <Ionicons name="globe-outline" size={92} color="rgba(255,255,255,0.85)" />
@@ -206,12 +350,14 @@ export default function DevicePairingFlowScreen({ navigation }) {
       );
     }
 
+    // Step 7: Complete
     return (
       <View style={{ alignItems: "center", marginTop: 34 }}>
-        <Text style={styles.pairingTitle}>Device Paired</Text>
+        <Text style={styles.pairingTitle}>Provisioning Complete!</Text>
+        <Text style={styles.bodyText}>Your device is now paired and ready to use.</Text>
 
         <View style={[styles.imageBox, { marginTop: 18 }]}>
-          <Ionicons name="flash-outline" size={80} color="rgba(255,255,255,0.85)" />
+          <Ionicons name="checkmark-circle-outline" size={80} color="#15C85A" />
         </View>
 
         <TouchableOpacity
@@ -220,7 +366,7 @@ export default function DevicePairingFlowScreen({ navigation }) {
           onPress={goDashboard}
         >
           <View style={styles.btnIconCircle}>
-            <Ionicons name="chevron-forward" size={25} color="white" />
+            <Ionicons name="home-outline" size={20} color="white" />
           </View>
           <Text style={styles.primaryText}>Go to Dashboard</Text>
         </TouchableOpacity>
@@ -241,7 +387,7 @@ export default function DevicePairingFlowScreen({ navigation }) {
             <Ionicons name="person-circle" size={26} color="#4DB5FF" />
             <View style={{ marginLeft: 8 }}>
               <Text style={styles.officerName}>Officer {displayName}</Text>
-              <Text style={styles.badge}>{badge ? `Badge #${badge}` : ''}</Text>
+              <Text style={styles.badge}>{badge ? `Badge #${badge}` : ""}</Text>
             </View>
           </View>
 
@@ -279,7 +425,7 @@ const styles = StyleSheet.create({
 
   page: { flexGrow: 1, paddingHorizontal: 18, paddingTop: 18, paddingBottom: 36 },
 
-  stepText: { color: "rgba(255,255,255,0.92)", fontSize: 13, fontWeight: "800", marginBottom: 8 },
+  stepText: { color: "rgba(255,255,255,0.92)", fontSize: 20, fontWeight: "800", marginBottom: 12 },
   bodyText: { color: "rgba(255,255,255,0.70)", fontSize: 12, lineHeight: 18, marginBottom: 16 },
 
   imageBox: {
@@ -294,8 +440,6 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
 
-  hintText: { color: "rgba(255,255,255,0.45)", fontSize: 11, marginTop: 6, marginBottom: 12 },
-
   primaryBtn: {
     height: 50,
     width: "100%",
@@ -305,11 +449,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 10,
+    marginTop: 16,
   },
- 
+
   primaryText: { color: "white", fontSize: 15, fontWeight: "800" },
 
-  label: { color: "rgba(255,255,255,0.55)", fontSize: 11, marginBottom: 6 },
+  label: { color: "rgba(255,255,255,0.55)", fontSize: 11, marginBottom: 6, fontWeight: "600" },
   inputWrap: {
     height: 44,
     borderRadius: 10,
@@ -324,7 +469,18 @@ const styles = StyleSheet.create({
   input: { color: "rgba(255,255,255,0.90)", fontSize: 12, flex: 1, paddingRight: 10 },
   smallNote: { color: "rgba(255,255,255,0.35)", fontSize: 10, marginTop: 6 },
 
+  errorText: { color: "#FF6B6B", fontSize: 12, marginTop: 12, marginBottom: 12 },
+
   pairingTitle: { color: "rgba(255,255,255,0.92)", fontSize: 20, fontWeight: "600" },
+
+  btnIconCircle: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "rgba(0,0,0,0.2)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
 
   footer: { marginTop: 22, alignSelf: "center", color: "rgba(255,255,255,0.25)", fontSize: 10 },
 });
